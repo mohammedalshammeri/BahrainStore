@@ -82,7 +82,7 @@ export async function storeRoutes(app: FastifyInstance) {
         description: true, descriptionAr: true,
         logo: true, favicon: true, currency: true,
         language: true, vatRate: true,
-        settings: { select: { primaryColor: true, secondaryColor: true, theme: true } },
+        settings: { select: { primaryColor: true, secondaryColor: true, fontFamily: true, theme: true } },
       },
     })
 
@@ -191,6 +191,24 @@ export async function storeRoutes(app: FastifyInstance) {
         }),
       ])
 
+    // Conversion rate: % of orders vs customers (simplified)
+    const conversionRate = totalCustomers > 0
+      ? Math.round((totalOrders / totalCustomers) * 100 * 10) / 10
+      : 0
+
+    // Repeat customers: customers with more than 1 order
+    const repeatCustomers = await prisma.customer.count({
+      where: { storeId: id, totalOrders: { gt: 1 } },
+    })
+    const repeatRate = totalCustomers > 0
+      ? Math.round((repeatCustomers / totalCustomers) * 100 * 10) / 10
+      : 0
+
+    // Average order value
+    const avgOrderValue = totalOrders > 0 && totalRevenue._sum.total
+      ? Math.round((Number(totalRevenue._sum.total) / totalOrders) * 1000) / 1000
+      : 0
+
     return reply.send({
       stats: {
         totalOrders,
@@ -198,8 +216,106 @@ export async function storeRoutes(app: FastifyInstance) {
         totalRevenue: totalRevenue._sum.total || 0,
         totalProducts,
         totalCustomers,
+        conversionRate,
+        repeatCustomers,
+        repeatRate,
+        avgOrderValue,
       },
       recentOrders,
     })
+  })
+
+  // ── Export Stats as CSV ───────────────────────
+  app.get('/:id/stats/export', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
+    const { period = '30' } = request.query as { period?: string }
+
+    const store = await prisma.store.findFirst({ where: { id, merchantId } })
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const days = Math.min(365, Math.max(1, parseInt(period) || 30))
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+
+    const orders = await prisma.order.findMany({
+      where: { storeId: id, createdAt: { gte: since } },
+      include: {
+        customer: { select: { firstName: true, lastName: true, phone: true, email: true } },
+        items: { select: { nameAr: true, quantity: true, price: true, total: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    const rows: string[] = [
+      'رقم الطلب,التاريخ,الحالة,حالة الدفع,العميل,الهاتف,المجموع,طريقة الدفع',
+    ]
+    for (const o of orders) {
+      const customerName = `${o.customer.firstName} ${o.customer.lastName}`
+      rows.push(
+        [
+          o.orderNumber,
+          o.createdAt.toISOString().slice(0, 10),
+          o.status,
+          o.paymentStatus,
+          `"${customerName}"`,
+          o.customer.phone,
+          Number(o.total).toFixed(3),
+          o.paymentMethod,
+        ].join(',')
+      )
+    }
+
+    const csv = rows.join('\n')
+    reply.header('Content-Type', 'text/csv; charset=utf-8')
+    reply.header('Content-Disposition', `attachment; filename="orders-${store.subdomain}-${period}d.csv"`)
+    return reply.send('\uFEFF' + csv) // BOM for Arabic UTF-8 Excel
+  })
+
+  // ── Page Builder: Get Homepage Blocks ─────────
+  app.get('/:id/homepage', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
+
+    const store = await prisma.store.findFirst({ where: { id, merchantId }, include: { settings: true } })
+    if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
+
+    const blocks = (store.settings?.homeBlocks ?? []) as any[]
+    return reply.send({ blocks })
+  })
+
+  // ── Page Builder: Save Homepage Blocks ────────
+  app.put('/:id/homepage', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
+
+    const body = request.body as { blocks: any[] }
+    if (!Array.isArray(body?.blocks)) {
+      return reply.status(400).send({ error: 'blocks يجب أن يكون مصفوفة' })
+    }
+
+    const store = await prisma.store.findFirst({ where: { id, merchantId } })
+    if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
+
+    await prisma.storeSettings.update({
+      where: { storeId: id },
+      data: { homeBlocks: body.blocks as any },
+    })
+
+    return reply.send({ message: 'تم حفظ تصميم الصفحة الرئيسية' })
+  })
+
+  // ── Page Builder: Get Homepage (public) ───────
+  app.get('/s/:subdomain/homepage', async (request, reply) => {
+    const { subdomain } = request.params as { subdomain: string }
+
+    const store = await prisma.store.findUnique({
+      where: { subdomain, isActive: true },
+      include: { settings: { select: { homeBlocks: true } } },
+    })
+
+    if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
+
+    const blocks = (store.settings?.homeBlocks ?? []) as any[]
+    return reply.send({ blocks })
   })
 }

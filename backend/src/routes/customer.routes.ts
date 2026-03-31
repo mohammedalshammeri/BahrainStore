@@ -77,4 +77,37 @@ export async function customerRoutes(app: FastifyInstance) {
 
     return reply.send({ customer })
   })
+
+  // ── Create Address (public — used by storefront checkout) ──────────
+  app.post('/address', async (request, reply) => {
+    const {
+      customerId, label, firstName, lastName, phone,
+      area, block, road, building, flat, isDefault,
+    } = request.body as {
+      customerId: string; label?: string; firstName: string; lastName: string; phone: string;
+      area: string; block?: string; road?: string; building?: string; flat?: string; isDefault?: boolean;
+    }
+
+    if (!customerId || !firstName || !lastName || !phone || !area) {
+      return reply.status(400).send({ error: 'بيانات العنوان ناقصة' })
+    }
+
+    const address = await prisma.address.create({
+      data: {
+        customerId,
+        label: label ?? 'المنزل',
+        firstName,
+        lastName,
+        phone,
+        area,
+        block,
+        road,
+        building,
+        flat,
+        isDefault: isDefault ?? false,
+      },
+    })
+
+    return reply.status(201).send({ address })
+  })
 }

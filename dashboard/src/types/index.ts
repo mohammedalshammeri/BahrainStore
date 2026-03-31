@@ -5,7 +5,9 @@ export interface Merchant {
   email: string;
   phone: string | null;
   avatar: string | null;
+  isAdmin?: boolean;
   createdAt: string;
+  twoFactorEnabled?: boolean;
 }
 
 export interface AuthTokens {
@@ -50,6 +52,45 @@ export interface StoreSettings {
   freeShippingThreshold: number | null;
   defaultShippingCost: number;
   allowCod: boolean;
+  primaryColor?: string;
+  secondaryColor?: string;
+  fontFamily?: string;
+  theme?: string;
+  whatsappEnabled?: boolean;
+  whatsappPhoneId?: string;
+  whatsappToken?: string;
+  smsEnabled?: boolean;
+  smsTwilioSid?: string;
+  smsTwilioToken?: string;
+  smsTwilioFrom?: string;
+  aramexEnabled?: boolean;
+  aramexUser?: string;
+  aramexPassword?: string;
+  aramexAccountNumber?: string;
+  aramexPinCode?: string;
+  dhlEnabled?: boolean;
+  dhlApiKey?: string;
+  dhlAccountNumber?: string;
+  tabbyEnabled?: boolean;
+  tabbyPublicKey?: string;
+  tabbySecretKey?: string;
+  tamaraEnabled?: boolean;
+  tamaraToken?: string;
+  applePayEnabled?: boolean;
+  applePayMerchantId?: string;
+  googlePayEnabled?: boolean;
+  googlePayMerchantId?: string;
+}
+
+export interface StoreStaff {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: "OWNER" | "ADMIN" | "STAFF";
+  isActive: boolean;
+  acceptedAt: string | null;
+  createdAt: string;
 }
 
 export interface StoreStats {
@@ -173,6 +214,8 @@ export interface Order {
   items: OrderItem[];
   shippingAddress: Address | null;
   notes: string | null;
+  trackingNumber: string | null;
+  shippingCompany: string | null;
   createdAt: string;
 }
 
@@ -190,7 +233,7 @@ export interface Address {
 export interface Coupon {
   id: string;
   code: string;
-  type: "PERCENTAGE" | "FIXED";
+  type: "PERCENTAGE" | "FIXED" | "FREE_SHIPPING";
   value: number;
   minOrderAmount: number | null;
   maxUses: number | null;

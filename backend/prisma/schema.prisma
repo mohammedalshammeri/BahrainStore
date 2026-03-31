@@ -22,13 +22,18 @@ model Merchant {
   lastName      String
   isVerified    Boolean   @default(false)
   isActive      Boolean   @default(true)
+  isAdmin       Boolean   @default(false)
   twoFactorEnabled Boolean @default(false)
   twoFactorSecret  String?
+  googleId         String?   @unique
+  passwordResetToken    String?   @unique
+  passwordResetExpires  DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   stores        Store[]
   sessions      Session[]
+  staffMemberships StoreStaff[]
 
   @@map("merchants")
 }
@@ -69,6 +74,8 @@ model Store {
   isActive     Boolean     @default(true)
   plan         StorePlan   @default(STARTER)
   planExpiresAt DateTime?
+  trialEndsAt  DateTime?
+  apiKey       String?     @unique
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
@@ -80,6 +87,26 @@ model Store {
   coupons      Coupon[]
   pages        Page[]
   settings     StoreSettings?
+  staff        StoreStaff[]
+  abandonedCarts AbandonedCart[]
+  pageViews      PageView[]
+  loyaltyTx      LoyaltyTransaction[]
+  billingInvoices BillingInvoice[]
+  installedApps  InstalledApp[]
+  blogPosts      BlogPost[]
+  reviews        Review[]
+  flashSales     FlashSale[]
+  webhooks       Webhook[]
+  referralCodes  ReferralCode[]
+  backInStockSubs BackInStockSubscription[]
+  giftCards      GiftCard[]
+  supportTickets SupportTicket[]
+  onboarding     Onboarding?
+  popups         Popup[]
+  emailCampaigns   EmailCampaign[]
+  emailSubscribers EmailSubscriber[]
+  upsellRules      UpsellRule[]
+  countdownTimers  CountdownTimer[]
 
   @@map("stores")
 }
@@ -89,16 +116,120 @@ model StoreSettings {
   storeId        String  @unique
   primaryColor   String  @default("#2563eb")
   secondaryColor String  @default("#f97316")
+  fontFamily     String  @default("Cairo")
   theme          String  @default("default")
   showOutOfStock Boolean @default(true)
   allowReviews   Boolean @default(true)
   freeShippingMin Decimal? @db.Decimal(10, 3)
+  whatsappEnabled Boolean @default(false)
+  whatsappPhoneId String?
+  whatsappToken   String?
+  // SMS (Twilio)
+  smsEnabled      Boolean @default(false)
+  smsTwilioSid    String?
+  smsTwilioToken  String?
+  smsTwilioFrom   String?
+  // Aramex
+  aramexEnabled   Boolean @default(false)
+  aramexUser      String?
+  aramexPassword  String?
+  aramexAccountNumber String?
+  aramexPinCode   String?
+  // DHL
+  dhlEnabled      Boolean @default(false)
+  dhlApiKey       String?
+  dhlAccountNumber String?
+  // Tabby
+  tabbyEnabled    Boolean @default(false)
+  tabbyPublicKey  String?
+  tabbySecretKey  String?
+  // Tamara
+  tamaraEnabled   Boolean @default(false)
+  tamaraToken     String?
+  // Apple Pay
+  applePayEnabled    Boolean @default(false)
+  applePayMerchantId String?
+  // Google Pay
+  googlePayEnabled    Boolean @default(false)
+  googlePayMerchantId String?
+  // Tap Payments
+  tapEnabled         Boolean @default(false)
+  tapSecretKey       String?
+  tapPublicKey       String?
+  tapWebhookSecret   String?
+  // Moyasar
+  moyasarEnabled     Boolean @default(false)
+  moyasarSecretKey   String?
+  moyasarPublicKey   String?
+  // Benefit Pay (NBB)
+  benefitEnabled     Boolean @default(false)
+  benefitMerchantId  String?
+  benefitApiKey      String?
+  // Loyalty Program (نقاط الولاء)
+  loyaltyEnabled      Boolean @default(false)
+  loyaltyPointsPerBD  Int     @default(10)
+  loyaltyBDPerPoint   Decimal @default(0.01) @db.Decimal(8, 4)
+  loyaltyMinRedeem    Int     @default(100)
+  loyaltyMaxRedeemPct Int     @default(20)
+  // Referral Program (برنامج الإحالة)
+  referralEnabled     Boolean @default(false)
+  referralRewardType  String  @default("FIXED") // FIXED | PERCENTAGE
+  referralRewardValue Decimal @default(1.000) @db.Decimal(10, 3)
+  referralMinOrder    Decimal? @db.Decimal(10, 3)
+  // Marketing Pixels (بكسلات التسويق)
+  googleTagId         String?
+  facebookPixelId     String?
+  tiktokPixelId       String?
+  snapchatPixelId     String?
+  googleAdsId         String?
+  // Homepage Page Builder
+  homeBlocks          Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   store          Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("store_settings")
+}
+
+// ─────────────────────────────────────────────
+// ABANDONED CARTS (السلل المتروكة)
+// ─────────────────────────────────────────────
+model AbandonedCart {
+  id           String    @id @default(cuid())
+  storeId      String
+  email        String
+  phone        String?
+  firstName    String?
+  cartData     Json
+  reminderSent Boolean   @default(false)
+  reminderSentAt DateTime?
+  recoveredAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, email])
+  @@map("abandoned_carts")
+}
+
+// ─────────────────────────────────────────────
+// PAGE VIEWS (تتبع الزيارات)
+// ─────────────────────────────────────────────
+model PageView {
+  id        String   @id @default(cuid())
+  storeId   String
+  path      String
+  referrer  String?
+  source    String?  // direct | google | social | email | other
+  country   String?
+  createdAt DateTime @default(now())
+
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, createdAt])
+  @@map("page_views")
 }
 
 // ─────────────────────────────────────────────
@@ -148,20 +279,28 @@ model Product {
   stock           Int           @default(0)
   lowStockAlert   Int           @default(5)
   weight          Decimal?      @db.Decimal(8, 3)
-  isActive        Boolean       @default(true)
-  isFeatured      Boolean       @default(false)
-  isDigital       Boolean       @default(false)
-  digitalFileUrl  String?
-  seoTitle        String?
-  seoDescription  String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  isActive             Boolean  @default(true)
+  isFeatured           Boolean  @default(false)
+  isDigital            Boolean  @default(false)
+  digitalFileUrl       String?
+  isPreOrder           Boolean  @default(false)
+  preOrderMessage      String?
+  preOrderMessageAr    String?
+  preOrderDeliveryDays Int?
+  seoTitle             String?
+  seoDescription       String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   store           Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
   category        Category?     @relation(fields: [categoryId], references: [id])
   images          ProductImage[]
+  options         ProductOption[]
   variants        ProductVariant[]
   orderItems      OrderItem[]
+  reviews         Review[]
+  flashSaleItems  FlashSaleItem[]
+  backInStockSubs BackInStockSubscription[]
 
   @@unique([storeId, slug])
   @@map("products")
@@ -179,20 +318,63 @@ model ProductImage {
   @@map("product_images")
 }
 
-model ProductVariant {
-  id         String   @id @default(cuid())
-  productId  String
-  name       String
-  nameAr     String
-  sku        String?
-  price      Decimal  @db.Decimal(10, 3)
-  stock      Int      @default(0)
-  image      String?
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
+model ProductOption {
+  id        String         @id @default(cuid())
+  productId String
+  name      String
+  nameAr    String
+  sortOrder Int            @default(0)
 
-  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  orderItems OrderItem[]
+  product   Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  values    OptionValue[]
+
+  @@map("product_options")
+}
+
+model OptionValue {
+  id        String               @id @default(cuid())
+  optionId  String
+  value     String
+  valueAr   String
+  color     String?
+  sortOrder Int                  @default(0)
+
+  option        ProductOption        @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  variantValues VariantOptionValue[]
+
+  @@map("option_values")
+}
+
+model VariantOptionValue {
+  variantId     String
+  optionValueId String
+
+  variant     ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  optionValue OptionValue    @relation(fields: [optionValueId], references: [id], onDelete: Cascade)
+
+  @@id([variantId, optionValueId])
+  @@map("variant_option_values")
+}
+
+model ProductVariant {
+  id           String   @id @default(cuid())
+  productId    String
+  name         String
+  nameAr       String
+  sku          String?
+  barcode      String?
+  price        Decimal  @db.Decimal(10, 3)
+  comparePrice Decimal? @db.Decimal(10, 3)
+  costPrice    Decimal? @db.Decimal(10, 3)
+  stock        Int      @default(0)
+  image        String?
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  product      Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems   OrderItem[]
+  optionValues VariantOptionValue[]
 
   @@map("product_variants")
 }
@@ -211,12 +393,16 @@ model Customer {
   isGuest      Boolean   @default(false)
   totalOrders  Int       @default(0)
   totalSpent   Decimal   @default(0) @db.Decimal(10, 3)
+  loyaltyPoints Int      @default(0)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
   orders       Order[]
   addresses    Address[]
+  loyaltyTx    LoyaltyTransaction[]
+  reviews      Review[]
+  referralCodes ReferralCode[]
 
   @@unique([storeId, phone])
   @@map("customers")
@@ -275,6 +461,7 @@ model Order {
   address         Address?      @relation(fields: [addressId], references: [id])
   items           OrderItem[]
   payment         Payment?
+  returns         OrderReturn[]
 
   @@unique([storeId, orderNumber])
   @@map("orders")
@@ -297,6 +484,48 @@ model OrderItem {
   variant   ProductVariant? @relation(fields: [variantId], references: [id])
 
   @@map("order_items")
+}
+
+// ─────────────────────────────────────────────
+// RETURNS (المرتجعات)
+// ─────────────────────────────────────────────
+model OrderReturn {
+  id             String       @id @default(cuid())
+  orderId        String
+  returnNumber   String
+  reason         String
+  status         ReturnStatus @default(PENDING)
+  refundAmount   Decimal      @default(0) @db.Decimal(10, 3)
+  refundMethod   String?      // original_payment | store_credit | bank_transfer
+  notes          String?
+  processedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items          ReturnItem[]
+
+  @@unique([orderId, returnNumber])
+  @@map("order_returns")
+}
+
+model ReturnItem {
+  id          String      @id @default(cuid())
+  returnId    String
+  orderItemId String
+  quantity    Int
+  reason      String?
+
+  orderReturn OrderReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@map("return_items")
+}
+
+enum ReturnStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REFUNDED
 }
 
 // ─────────────────────────────────────────────
@@ -346,16 +575,20 @@ model Coupon {
 // PAGES (صفحات المتجر)
 // ─────────────────────────────────────────────
 model Page {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   storeId     String
   title       String
   titleAr     String
   slug        String
   content     String?
   contentAr   String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  excerpt     String?
+  pageType    PageType  @default(CUSTOM)
+  isActive    Boolean   @default(true)
+  seoTitle    String?
+  seoDesc     String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -364,8 +597,454 @@ model Page {
 }
 
 // ─────────────────────────────────────────────
-// ENUMS
+// STORE STAFF (فريق المتجر)
 // ─────────────────────────────────────────────
+model StoreStaff {
+  id            String    @id @default(cuid())
+  storeId       String
+  merchantId    String?
+  email         String
+  firstName     String
+  lastName      String
+  passwordHash  String?
+  role          StaffRole @default(STAFF)
+  isActive      Boolean   @default(true)
+  inviteToken   String?   @unique
+  inviteExpires DateTime?
+  acceptedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  store         Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  merchant      Merchant? @relation(fields: [merchantId], references: [id])
+
+  @@unique([storeId, email])
+  @@map("store_staff")
+}
+
+// ─────────────────────────────────────────────
+// LOYALTY (نقاط الولاء)
+// ─────────────────────────────────────────────
+model LoyaltyTransaction {
+  id          String          @id @default(cuid())
+  storeId     String
+  customerId  String
+  orderId     String?
+  type        LoyaltyTxType
+  points      Int
+  description String?
+  createdAt   DateTime        @default(now())
+
+  store       Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer    Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, customerId])
+  @@map("loyalty_transactions")
+}
+
+// ─────────────────────────────────────────────
+// BILLING INVOICES (فواتير الاشتراك)
+// ─────────────────────────────────────────────
+model BillingInvoice {
+  id            String               @id @default(cuid())
+  storeId       String
+  plan          StorePlan
+  periodStart   DateTime
+  periodEnd     DateTime
+  amountBD      Decimal              @db.Decimal(10, 3)
+  status        BillingInvoiceStatus @default(PENDING)
+  paidAt        DateTime?
+  paymentRef    String?
+  invoiceNumber String               @unique
+  notes         String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  store         Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@map("billing_invoices")
+}
+
+// ─────────────────────────────────────────────
+// APP STORE (متجر التطبيقات)
+// ─────────────────────────────────────────────
+model App {
+  id            String          @id @default(cuid())
+  slug          String          @unique
+  name          String
+  nameAr        String
+  description   String
+  descriptionAr String
+  icon          String?
+  category      AppCategory
+  developer     String
+  developerEmail String?
+  webhookUrl    String?
+  isOfficial    Boolean         @default(false)
+  isApproved    Boolean         @default(false)
+  pricingType   AppPricingType  @default(FREE)
+  monthlyPrice  Decimal?        @db.Decimal(10, 3)
+  isActive      Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  installs      InstalledApp[]
+
+  @@map("apps")
+}
+
+model InstalledApp {
+  id          String    @id @default(cuid())
+  storeId     String
+  appId       String
+  isActive    Boolean   @default(true)
+  config      Json?
+  installedAt DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  app         App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, appId])
+  @@map("installed_apps")
+}
+
+// ─────────────────────────────────────────────
+// BLOG (المدونة)
+// ─────────────────────────────────────────────
+model BlogPost {
+  id          String    @id @default(cuid())
+  storeId     String
+  title       String
+  titleAr     String?
+  slug        String
+  content     String
+  contentAr   String?
+  excerpt     String?
+  coverImage  String?
+  isPublished Boolean   @default(false)
+  publishedAt DateTime?
+  seoTitle    String?
+  seoDesc     String?
+  tags        String[]
+  authorName  String?
+  views       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, slug])
+  @@map("blog_posts")
+}
+
+// ─────────────────────────────────────────────
+// REVIEWS (تقييمات المنتجات)
+// ─────────────────────────────────────────────
+model Review {
+  id          String       @id @default(cuid())
+  storeId     String
+  productId   String
+  customerId  String?
+  name        String
+  email       String?
+  rating      Int
+  title       String?
+  body        String?
+  photos      String[]
+  status      ReviewStatus @default(PENDING)
+  isVerified  Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product     Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  customer    Customer?    @relation(fields: [customerId], references: [id])
+
+  @@index([storeId, productId])
+  @@map("reviews")
+}
+
+// ─────────────────────────────────────────────
+// FLASH SALES (العروض المحدودة)
+// ─────────────────────────────────────────────
+model FlashSale {
+  id            String        @id @default(cuid())
+  storeId       String
+  name          String
+  nameAr        String
+  startsAt      DateTime
+  endsAt        DateTime
+  discountType  CouponType    @default(PERCENTAGE)
+  discountValue Decimal       @db.Decimal(10, 3)
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  items         FlashSaleItem[]
+
+  @@map("flash_sales")
+}
+
+model FlashSaleItem {
+  id          String    @id @default(cuid())
+  flashSaleId String
+  productId   String
+
+  flashSale   FlashSale @relation(fields: [flashSaleId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([flashSaleId, productId])
+  @@map("flash_sale_items")
+}
+
+// ─────────────────────────────────────────────
+// WEBHOOKS (Webhooks الأحداث)
+// ─────────────────────────────────────────────
+model Webhook {
+  id        String         @id @default(cuid())
+  storeId   String
+  url       String
+  secret    String         // HMAC signing secret
+  events    WebhookEvent[]
+  isActive  Boolean        @default(true)
+  lastCalledAt DateTime?
+  failureCount Int         @default(0)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  store     Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  logs      WebhookLog[]
+
+  @@map("webhooks")
+}
+
+model WebhookLog {
+  id         String   @id @default(cuid())
+  webhookId  String
+  event      String
+  payload    Json
+  statusCode Int?
+  response   String?
+  success    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  webhook    Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId, createdAt])
+  @@map("webhook_logs")
+}
+
+// ─────────────────────────────────────────────
+// REFERRAL PROGRAM (برنامج الإحالة)
+// ─────────────────────────────────────────────
+model ReferralCode {
+  id           String    @id @default(cuid())
+  storeId      String
+  customerId   String
+  code         String
+  uses         Int       @default(0)
+  totalEarned  Decimal   @default(0) @db.Decimal(10, 3)
+  createdAt    DateTime  @default(now())
+
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  referrals    Referral[]
+
+  @@unique([storeId, code])
+  @@map("referral_codes")
+}
+
+model Referral {
+  id             String       @id @default(cuid())
+  referralCodeId String
+  referredEmail  String
+  orderId        String?
+  rewardAmount   Decimal      @default(0) @db.Decimal(10, 3)
+  status         ReferralStatus @default(PENDING)
+  createdAt      DateTime     @default(now())
+
+  referralCode   ReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Cascade)
+
+  @@map("referrals")
+}
+
+// ─────────────────────────────────────────────
+// BACK IN STOCK (إشعارات العودة للمخزون)
+// ─────────────────────────────────────────────
+model BackInStockSubscription {
+  id        String   @id @default(cuid())
+  storeId   String
+  productId String
+  variantId String?
+  email     String
+  phone     String?
+  notified  Boolean  @default(false)
+  notifiedAt DateTime?
+  createdAt DateTime @default(now())
+
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, productId, email])
+  @@map("back_in_stock_subscriptions")
+}
+
+// ─────────────────────────────────────────────
+// GIFT CARDS (كروت الهدية)
+// ─────────────────────────────────────────────
+model GiftCard {
+  id           String         @id @default(cuid())
+  storeId      String
+  code         String
+  initialValue Decimal        @db.Decimal(10, 3)
+  balance      Decimal        @db.Decimal(10, 3)
+  isActive     Boolean        @default(true)
+  expiresAt    DateTime?
+  purchasedBy  String?        // customerId
+  recipientEmail String?
+  recipientName  String?
+  message      String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  store        Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  transactions GiftCardTransaction[]
+
+  @@unique([storeId, code])
+  @@map("gift_cards")
+}
+
+model GiftCardTransaction {
+  id         String   @id @default(cuid())
+  giftCardId String
+  orderId    String?
+  amount     Decimal  @db.Decimal(10, 3)
+  type       String   // PURCHASE | USAGE | REFUND
+  note       String?
+  createdAt  DateTime @default(now())
+
+  giftCard   GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
+
+  @@map("gift_card_transactions")
+}
+
+// ─────────────────────────────────────────────
+// SUPPORT TICKETS (تذاكر الدعم)
+// ─────────────────────────────────────────────
+model SupportTicket {
+  id          String         @id @default(cuid())
+  storeId     String
+  merchantId  String
+  subject     String
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+  category    String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  resolvedAt  DateTime?
+
+  store       Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  messages    TicketMessage[]
+
+  @@index([storeId, status])
+  @@map("support_tickets")
+}
+
+model TicketMessage {
+  id         String         @id @default(cuid())
+  ticketId   String
+  senderType String         // MERCHANT | ADMIN
+  senderId   String
+  body       String
+  attachments String[]
+  createdAt  DateTime       @default(now())
+
+  ticket     SupportTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@map("ticket_messages")
+}
+
+// ─────────────────────────────────────────────
+// ONBOARDING (إعداد المتجر)
+// ─────────────────────────────────────────────
+model Onboarding {
+  id            String   @id @default(cuid())
+  storeId       String   @unique
+  step1Done     Boolean  @default(false) // Store info
+  step2Done     Boolean  @default(false) // Add first product
+  step3Done     Boolean  @default(false) // Upload logo/brand
+  step4Done     Boolean  @default(false) // Configure payment
+  step5Done     Boolean  @default(false) // Configure shipping
+  completedAt   DateTime?
+  skippedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("onboardings")
+}
+
+// ─────────────────────────────────────────────
+// STOREFRONT POPUPS (النوافذ المنبثقة)
+// ─────────────────────────────────────────────
+model Popup {
+  id          String    @id @default(cuid())
+  storeId     String
+  name        String
+  titleAr     String?
+  title       String?
+  bodyAr      String?
+  body        String?
+  buttonText  String?
+  buttonUrl   String?
+  trigger     PopupTrigger @default(ON_EXIT)
+  delaySeconds Int       @default(5)
+  couponCode  String?
+  imageUrl    String?
+  isActive    Boolean   @default(true)
+  showOnce    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("popups")
+}
+enum AppCategory {
+  MARKETING
+  SHIPPING
+  ACCOUNTING
+  CRM
+  ERP
+  ANALYTICS
+  PAYMENTS
+  SOCIAL
+  OTHER
+}
+
+enum AppPricingType {
+  FREE
+  PAID
+  FREEMIUM
+}
+enum BillingInvoiceStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+  WAIVED
+}
+
+enum LoyaltyTxType {
+  EARNED
+  REDEEMED
+  EXPIRED
+  ADJUSTED
+}
 enum StoreLanguage {
   AR
   EN
@@ -380,6 +1059,7 @@ enum StorePlan {
 }
 
 enum OrderStatus {
+  DRAFT
   PENDING
   CONFIRMED
   PROCESSING
@@ -407,10 +1087,219 @@ enum PaymentMethod {
   BANK_TRANSFER
   TABBY
   TAMARA
+  TAP_PAYMENTS
+  MOYASAR
 }
 
 enum CouponType {
   PERCENTAGE
   FIXED
   FREE_SHIPPING
+}
+
+enum StaffRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum PageType {
+  ABOUT
+  CONTACT
+  PRIVACY
+  TERMS
+  SHIPPING_POLICY
+  RETURNS_POLICY
+  FAQ
+  CUSTOM
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum WebhookEvent {
+  ORDER_CREATED
+  ORDER_UPDATED
+  ORDER_CANCELLED
+  PAYMENT_COMPLETED
+  PRODUCT_CREATED
+  PRODUCT_UPDATED
+  PRODUCT_DELETED
+  CUSTOMER_CREATED
+  REVIEW_SUBMITTED
+}
+
+enum ReferralStatus {
+  PENDING
+  COMPLETED
+  EXPIRED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_MERCHANT
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum PopupTrigger {
+  ON_LOAD
+  ON_EXIT
+  ON_SCROLL
+  AFTER_DELAY
+}
+
+// ─────────────────────────────────────────────
+// EMAIL MARKETING (التسويق بالبريد الإلكتروني)
+// ─────────────────────────────────────────────
+model EmailCampaign {
+  id             String              @id @default(cuid())
+  storeId        String
+  name           String
+  subject        String?
+  subjectAr      String?
+  body           String?
+  bodyAr         String?
+  status         EmailCampaignStatus @default(DRAFT)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  recipientCount Int                 @default(0)
+  openCount      Int                 @default(0)
+  clickCount     Int                 @default(0)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  store          Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("email_campaigns")
+}
+
+model EmailSubscriber {
+  id              String    @id @default(cuid())
+  storeId         String
+  email           String
+  firstName       String?
+  lastName        String?
+  tags            String[]
+  isActive        Boolean   @default(true)
+  source          String    @default("STOREFRONT")
+  subscribedAt    DateTime  @default(now())
+  unsubscribedAt  DateTime?
+
+  store           Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, email])
+  @@map("email_subscribers")
+}
+
+enum EmailCampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// ANNOUNCEMENTS (الإعلانات - للمنصة)
+// ─────────────────────────────────────────────
+model Announcement {
+  id        String           @id @default(cuid())
+  title     String
+  titleAr   String
+  body      String?
+  bodyAr    String?
+  type      AnnouncementType @default(INFO)
+  isActive  Boolean          @default(true)
+  isPinned  Boolean          @default(false)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@map("announcements")
+}
+
+enum AnnouncementType {
+  INFO
+  WARNING
+  MAINTENANCE
+  FEATURE
+}
+
+// ─────────────────────────────────────────────
+// HELP CENTER (مركز المساعدة)
+// ─────────────────────────────────────────────
+model HelpArticle {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  titleAr     String
+  body        String
+  bodyAr      String
+  category    String   @default("general")
+  categoryAr  String   @default("عام")
+  isPublished Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  viewCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("help_articles")
+}
+
+// ─────────────────────────────────────────────
+// UPSELL / CROSS-SELL RULES
+// ─────────────────────────────────────────────
+model UpsellRule {
+  id                String   @id @default(cuid())
+  storeId           String
+  name              String
+  title             String?
+  titleAr           String?
+  isActive          Boolean  @default(true)
+  triggerType       String   @default("ANY") // ANY | SPECIFIC_PRODUCT | SPECIFIC_CATEGORY
+  triggerProductId  String?
+  triggerCategoryId String?
+  offerProductIds   String[]
+  discountPct       Decimal? @db.Decimal(5, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("upsell_rules")
+}
+
+// ─────────────────────────────────────────────
+// COUNTDOWN TIMERS (العدادات التنازلية)
+// ─────────────────────────────────────────────
+model CountdownTimer {
+  id          String   @id @default(cuid())
+  storeId     String
+  name        String
+  title       String?
+  titleAr     String?
+  endsAt      DateTime
+  isActive    Boolean  @default(true)
+  showOnAllPages Boolean @default(false)
+  targetUrl   String?
+  style       String   @default("BAR") // BAR | POPUP | INLINE
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("countdown_timers")
 }

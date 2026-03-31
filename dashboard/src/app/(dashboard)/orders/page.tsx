@@ -10,16 +10,18 @@ import { Card } from "@/components/ui/card";
 import { orderStatusBadge, paymentStatusBadge } from "@/components/ui/badge";
 import { formatBHD, formatDateTime } from "@/lib/utils";
 import type { Order, OrderStatus } from "@/types";
-import { ShoppingCart, Search, Eye, Filter } from "lucide-react";
+import { ShoppingCart, Search, Eye, Filter, Printer, Truck, Plus, RotateCcw } from "lucide-react";
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "كل الطلبات" },
+  { value: "DRAFT", label: "مسودة" },
   { value: "PENDING", label: "معلّق" },
   { value: "CONFIRMED", label: "مؤكّد" },
   { value: "PROCESSING", label: "قيد التجهيز" },
   { value: "SHIPPED", label: "تم الشحن" },
-  { value: "DELIVERED", label: "مُسلَّم" },
+  { value: "DELIVERED", label: "مُسلّم" },
   { value: "CANCELLED", label: "ملغي" },
+  { value: "REFUNDED", label: "مسترد" },
 ];
 
 export default function OrdersPage() {
@@ -46,6 +48,12 @@ export default function OrdersPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["orders"] }),
   });
 
+  const createShipmentMutation = useMutation({
+    mutationFn: (orderId: string) =>
+      api.post(`/orders/${orderId}/shipment`, { carrier: "aramex", weightKg: 1 }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["orders"] }),
+  });
+
   const orders: Order[] = data?.data ?? [];
   const total: number = data?.total ?? 0;
 
@@ -55,30 +63,40 @@ export default function OrdersPage() {
 
       <div className="p-6 space-y-4">
         {/* Toolbar */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="relative w-full sm:w-72">
-            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="رقم الطلب أو اسم العميل..."
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              className="h-9 w-full rounded-lg border border-slate-200 bg-white pr-9 pl-3 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="رقم الطلب أو اسم العميل..."
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                className="h-9 w-full rounded-lg border border-slate-200 bg-white pr-9 pl-3 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-slate-400 shrink-0" />
+              <select
+                value={status}
+                onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {STATUS_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Filter className="h-4 w-4 text-slate-400 shrink-0" />
-            <select
-              value={status}
-              onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              {STATUS_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
+          <Link
+            href="/orders/draft"
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 transition"
+          >
+            <Plus className="h-4 w-4" />
+            طلب يدوي جديد
+          </Link>
         </div>
 
         {/* Table */}
@@ -157,6 +175,34 @@ export default function OrdersPage() {
                               <Eye className="h-3.5 w-3.5" />
                             </button>
                           </Link>
+                          <a
+                            href={`${process.env.NEXT_PUBLIC_API_URL}/orders/${order.id}/shipping-label`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+                            title="طباعة ملصق الشحن"
+                          >
+                            <Printer className="h-3.5 w-3.5" />
+                          </a>
+                          {!order.trackingNumber && (
+                            <button
+                              onClick={() => createShipmentMutation.mutate(order.id)}
+                              disabled={createShipmentMutation.isPending}
+                              className="flex h-8 px-2 items-center justify-center rounded-lg text-xs text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 transition-colors disabled:opacity-50"
+                              title="إنشاء شحنة Aramex"
+                            >
+                              <Truck className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          {order.status === "DELIVERED" && (
+                            <Link
+                              href={`/orders/${order.id}/returns`}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-orange-50 hover:text-orange-600 transition-colors"
+                              title="المرتجعات"
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            </Link>
+                          )}
                           <select
                             value={order.status}
                             onChange={(e) =>

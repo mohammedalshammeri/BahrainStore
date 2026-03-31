@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useAuthStore } from "@/store/auth.store";
@@ -12,13 +12,44 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { formatBHD, formatDate } from "@/lib/utils";
 import type { Product } from "@/types";
-import { Plus, Search, Edit2, Trash2, Image as ImageIcon, Package } from "lucide-react";
+import { Plus, Search, Edit2, Trash2, Image as ImageIcon, Package, Upload, Download, AlertTriangle, Barcode } from "lucide-react";
 
 export default function ProductsPage() {
   const { store } = useAuthStore();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [csvMsg, setCsvMsg] = useState("");
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const [lowStockCount, setLowStockCount] = useState<number | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
+
+  // Fetch low-stock count once
+  useQuery({
+    queryKey: ["low-stock-count", store?.id],
+    queryFn: async () => {
+      const res = await api.get(`/inventory/low-stock?storeId=${store?.id}`);
+      setLowStockCount((res.data as { total: number }).total);
+      return res.data;
+    },
+    enabled: !!store?.id,
+    staleTime: 60_000,
+  });
+
+  const handleCsvExport = async () => {
+    setExportLoading(true);
+    try {
+      const res = await api.get(`/inventory/export?storeId=${store?.id}`, { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([res.data], { type: "text/csv;charset=utf-8" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `products-${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportLoading(false);
+    }
+  };
 
   const { data, isLoading } = useQuery({
     queryKey: ["products", store?.id, search, page],
@@ -35,6 +66,30 @@ export default function ProductsPage() {
     mutationFn: (id: string) => api.delete(`/products/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["products"] }),
   });
+
+  const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCsvMsg("");
+    try {
+      const text = await file.text();
+      const lines = text.trim().split("\n");
+      if (lines.length < 2) { setCsvMsg("الملف فارغ"); return; }
+      const headers = lines[0].split(",").map((h) => h.trim().replace(/"/g, ""));
+      const products = lines.slice(1).map((line) => {
+        const vals = line.split(",").map((v) => v.trim().replace(/"/g, ""));
+        return Object.fromEntries(headers.map((h, i) => [h, vals[i]]));
+      });
+      const res = await api.post("/products/bulk", { storeId: store!.id, products });
+      setCsvMsg(`تم استيراد ${res.data.created} منتج بنجاح`);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    } catch {
+      setCsvMsg("حدث خطأ أثناء الاستيراد");
+    } finally {
+      if (csvInputRef.current) csvInputRef.current.value = "";
+      setTimeout(() => setCsvMsg(""), 5000);
+    }
+  };
 
   const products: Product[] = data?.data ?? [];
   const total: number = data?.total ?? 0;
@@ -56,13 +111,56 @@ export default function ProductsPage() {
               className="h-9 w-full rounded-lg border border-slate-200 bg-white pr-9 pl-3 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
-          <Link href="/products/new">
-            <Button>
-              <Plus className="h-4 w-4" />
-              إضافة منتج
+          <div className="flex items-center gap-2">
+            {/* CSV Import */}
+            <input
+              ref={csvInputRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={handleCsvImport}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCsvExport}
+              disabled={exportLoading}
+            >
+              <Download className="h-4 w-4" />
+              {exportLoading ? "جاري التصدير..." : "تصدير CSV"}
             </Button>
-          </Link>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => csvInputRef.current?.click()}
+            >
+              <Upload className="h-4 w-4" />
+              استيراد CSV
+            </Button>
+            <Link href="/products/new">
+              <Button>
+                <Plus className="h-4 w-4" />
+                إضافة منتج
+              </Button>
+            </Link>
+          </div>
         </div>
+
+        {/* Low stock banner */}
+        {lowStockCount !== null && lowStockCount > 0 && (
+          <div className="flex items-center gap-3 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span><strong>{lowStockCount}</strong> منتج وصل للحد الأدنى للمخزون أو نفد</span>
+          </div>
+        )}
+
+        {csvMsg && (
+          <div className={`rounded-lg px-4 py-3 text-sm ${csvMsg.includes("نجاح") ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+            {csvMsg}
+          </div>
+        )}
 
         {/* Table */}
         <Card>
@@ -180,11 +278,16 @@ export default function ProductsPage() {
                       {/* Actions */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <Link href={`/products/${product.id}`}>
+                          <Link href={`/products/${product.id}/edit`}>
                             <button className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
                               <Edit2 className="h-3.5 w-3.5" />
                             </button>
                           </Link>
+                          <a href={`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001"}/api/v1/inventory/barcode/${product.id}?storeId=${store?.id}`} download target="_blank" rel="noopener noreferrer">
+                            <button className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-purple-50 hover:text-purple-600 transition-colors" title="تنزيل الباركود">
+                              <Barcode className="h-3.5 w-3.5" />
+                            </button>
+                          </a>
                           <button
                             onClick={() => {
                               if (confirm("هل أنت متأكد من حذف هذا المنتج؟"))

@@ -16,6 +16,7 @@ import { Card, CardHeader, CardBody } from "@/components/ui/card";
 import type { Category } from "@/types";
 import { ArrowRight, Save } from "lucide-react";
 import Link from "next/link";
+import { VariantEditor } from "@/components/products/variant-editor";
 
 const schema = z.object({
   name: z.string().min(1, "اسم المنتج مطلوب"),
@@ -30,6 +31,11 @@ const schema = z.object({
   categoryId: z.string().optional(),
   trackStock: z.boolean().default(true),
   isActive: z.boolean().default(true),
+  isDigital: z.boolean().default(false),
+  digitalFileUrl: z.string().optional(),
+  isPreOrder: z.boolean().default(false),
+  preOrderMessageAr: z.string().optional(),
+  preOrderDeliveryDays: z.coerce.number().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -39,6 +45,9 @@ export default function NewProductPage() {
   const { store } = useAuthStore();
   const queryClient = useQueryClient();
   const [serverError, setServerError] = useState("");
+  const [createdProductId, setCreatedProductId] = useState<string | null>(null);
+  const watchedPrice = 0;
+  const watchedStock = 0;
 
   const { data: categories } = useQuery<Category[]>({
     queryKey: ["categories", store?.id],
@@ -56,17 +65,20 @@ export default function NewProductPage() {
     formState: { errors, isSubmitting },
   } = useForm<FormData>({
     resolver: zodResolver(schema) as Resolver<FormData>,
-    defaultValues: { stock: 0, trackStock: true, isActive: true },
+    defaultValues: { stock: 0, trackStock: true, isActive: true, isDigital: false },
   });
+
+  const isDigital = watch("isDigital");
+  const isPreOrder = watch("isPreOrder");
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return api.post("/products", { ...(data as any), storeId: store!.id });
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      router.push("/products");
+      setCreatedProductId(res.data.product.id);
     },
     onError: (err: unknown) => {
       const error = err as { response?: { data?: { message?: string } } };
@@ -203,6 +215,35 @@ export default function NewProductPage() {
                   </div>
                 </CardBody>
               </Card>
+
+              {/* Variants — shown after product is saved */}
+              {createdProductId ? (
+                <Card>
+                  <CardHeader title="متغيرات المنتج" />
+                  <CardBody>
+                    <VariantEditor
+                      productId={createdProductId}
+                      basePrice={0}
+                      baseStock={0}
+                      onSaved={() => router.push("/products")}
+                    />
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => router.push("/products")}
+                      >
+                        الانتقال للمنتجات بدون متغيرات
+                      </Button>
+                    </div>
+                  </CardBody>
+                </Card>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-sm text-slate-500">
+                  احفظ المنتج أولاً لإضافة المتغيرات (اللون، المقاس، ...)
+                </div>
+              )}
             </div>
 
             {/* Sidebar */}
@@ -239,6 +280,64 @@ export default function NewProductPage() {
                       ))}
                     </select>
                   </div>
+
+                  {/* Digital Product */}
+                  <div className="border-t border-slate-100 pt-3 space-y-3">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        id="isDigital"
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                        {...register("isDigital")}
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-slate-900">منتج رقمي</p>
+                        <p className="text-xs text-slate-500">ملف قابل للتحميل بعد الشراء</p>
+                      </div>
+                    </label>
+                    {isDigital && (
+                      <Input
+                        label="رابط الملف"
+                        placeholder="https://example.com/file.pdf"
+                        type="url"
+                        hint="رابط مباشر للملف الرقمي"
+                        {...register("digitalFileUrl")}
+                      />
+                    )}
+                  </div>
+
+                  {/* Pre-order */}
+                  <div className="border-t border-slate-100 pt-3 space-y-3">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        id="isPreOrder"
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                        {...register("isPreOrder")}
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-slate-900">طلب مسبق (Pre-order)</p>
+                        <p className="text-xs text-slate-500">السماح بالطلب قبل توفر المنتج</p>
+                      </div>
+                    </label>
+                    {isPreOrder && (
+                      <>
+                        <Input
+                          label="رسالة الطلب المسبق (عربي)"
+                          placeholder="سيُشحن خلال 14 يوم"
+                          hint="تظهر للعملاء في صفحة المنتج"
+                          {...register("preOrderMessageAr")}
+                        />
+                        <Input
+                          label="مدة التسليم (أيام)"
+                          type="number"
+                          min="1"
+                          placeholder="14"
+                          {...register("preOrderDeliveryDays")}
+                        />
+                      </>
+                    )}
+                  </div>
                 </CardBody>
               </Card>
 
@@ -247,9 +346,10 @@ export default function NewProductPage() {
                 className="w-full"
                 size="lg"
                 loading={isSubmitting || createMutation.isPending}
+                disabled={!!createdProductId}
               >
                 <Save className="h-4 w-4" />
-                حفظ المنتج
+                {createdProductId ? "تم الحفظ ✓" : "حفظ المنتج"}
               </Button>
             </div>
           </div>

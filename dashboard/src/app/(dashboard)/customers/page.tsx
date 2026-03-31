@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
 import { Header } from "@/components/layout/header";
@@ -88,9 +89,13 @@ export default function CustomersPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-600">
-                            {getInitials(customer.name)}
+                            {getInitials(`${(customer as any).firstName ?? ""} ${(customer as any).lastName ?? customer.name ?? ""}`)}
                           </div>
-                          <span className="font-medium text-slate-900">{customer.name}</span>
+                          <Link href={`/customers/${customer.id}`} className="font-medium text-slate-900 hover:text-indigo-600 hover:underline">
+                            {(customer as any).firstName && (customer as any).lastName
+                              ? `${(customer as any).firstName} ${(customer as any).lastName}`
+                              : customer.name}
+                          </Link>
                         </div>
                       </td>
 

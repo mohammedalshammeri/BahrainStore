@@ -15,15 +15,54 @@ import {
   LogOut,
   Store,
   ChevronLeft,
+  Layers,
+  ShieldAlert,
+  PanelLeft,
+  ShoppingBag,
+  CreditCard,
+  LayoutGrid,
+  FileText,
+  LayoutList,
+  Star,
+  Zap,
+  Webhook,
+  Gift,
+  Users2,
+  BellRing,
+  Megaphone,
+  Layers3,
+  HeadphonesIcon,
+  Rocket,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "الرئيسية", icon: LayoutDashboard },
+  { href: "/onboarding", label: "إعداد المتجر", icon: Rocket },
   { href: "/products", label: "المنتجات", icon: Package },
+  { href: "/categories", label: "التصنيفات", icon: Layers },
   { href: "/orders", label: "الطلبات", icon: ShoppingCart },
   { href: "/customers", label: "العملاء", icon: Users },
   { href: "/coupons", label: "الكوبونات", icon: Tag },
+  { href: "/gift-cards", label: "كروت الهدية", icon: Gift },
+  { href: "/promotions", label: "العروض والتخفيضات", icon: Zap },
+  { href: "/reviews", label: "التقييمات", icon: Star },
+  { href: "/referral", label: "برنامج الإحالة", icon: Users2 },
+  { href: "/back-in-stock", label: "إشعارات المخزون", icon: BellRing },
+  { href: "/popups", label: "النوافذ المنبثقة", icon: Layers3 },
+  { href: "/abandoned-carts", label: "العربات المتروكة", icon: ShoppingBag },
+  { href: "/marketing", label: "التسويق والبكسلات", icon: Megaphone },
+  { href: "/blog", label: "المدونة", icon: FileText },
+  { href: "/pages", label: "الصفحات", icon: LayoutList },
+  { href: "/builder", label: "منشئ الصفحات", icon: PanelLeft },
+  { href: "/webhooks", label: "Webhooks", icon: Webhook },
   { href: "/analytics", label: "التحليلات", icon: BarChart2 },
+  { href: "/finance", label: "التقارير المالية", icon: CreditCard },
+  { href: "/email-marketing", label: "التسويق الإلكتروني", icon: Megaphone },
+  { href: "/upsell", label: "البيع الإضافي", icon: Zap },
+  { href: "/countdown-timers", label: "العدادات التنازلية", icon: BarChart2 },
+  { href: "/billing", label: "الاشتراك", icon: CreditCard },
+  { href: "/apps", label: "متجر التطبيقات", icon: LayoutGrid },
+  { href: "/support", label: "الدعم الفني", icon: HeadphonesIcon },
   { href: "/settings", label: "الإعدادات", icon: Settings },
 ];
 
@@ -81,6 +120,22 @@ export function Sidebar() {
               </li>
             );
           })}
+          {(merchant as any)?.isAdmin && (
+            <li className="pt-2 mt-2 border-t border-indigo-900">
+              <Link
+                href="/admin"
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                  pathname.startsWith("/admin")
+                    ? "bg-amber-500 text-white"
+                    : "text-amber-300 hover:bg-amber-900/40 hover:text-amber-100"
+                )}
+              >
+                <ShieldAlert className="h-4 w-4 shrink-0" />
+                <span>لوحة الإدارة</span>
+              </Link>
+            </li>
+          )}
         </ul>
       </nav>
 
