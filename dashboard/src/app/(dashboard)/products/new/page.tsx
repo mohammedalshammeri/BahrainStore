@@ -14,9 +14,33 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardBody } from "@/components/ui/card";
 import type { Category } from "@/types";
-import { ArrowRight, Save } from "lucide-react";
+import { ArrowRight, Save, ShoppingBag, Download, Clock, Gift, RefreshCw, Wrench, Layers, SlidersHorizontal, Plus, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { VariantEditor } from "@/components/products/variant-editor";
+
+const PRODUCT_TYPES = [
+  { id: "physical",     label: "مادي",        desc: "منتج يُشحن للعميل",          icon: ShoppingBag,       color: "indigo"  },
+  { id: "digital",      label: "رقمي",         desc: "ملف قابل للتحميل",           icon: Download,          color: "blue"    },
+  { id: "preorder",     label: "طلب مسبق",    desc: "يُباع قبل توفّره",            icon: Clock,             color: "amber"   },
+  { id: "gift_card",    label: "بطاقة هدية",  desc: "رصيد يُستخدم في المتجر",     icon: Gift,              color: "pink"    },
+  { id: "subscription", label: "اشتراك",       desc: "دفع دوري متكرر",             icon: RefreshCw,         color: "violet"  },
+  { id: "service",      label: "خدمة",         desc: "لا يحتاج شحناً",             icon: Wrench,            color: "teal"    },
+  { id: "bundle",       label: "مجموعة",       desc: "عدة منتجات بسعر واحد",       icon: Layers,            color: "orange"  },
+  { id: "custom",       label: "تخصيص",        desc: "العميل يُحدد تفاصيله",        icon: SlidersHorizontal, color: "rose"    },
+] as const;
+
+type ProductTypeId = typeof PRODUCT_TYPES[number]["id"];
+
+const ICON_COLORS: Record<string, string> = {
+  indigo: "bg-indigo-50 text-indigo-600 border-indigo-200",
+  blue:   "bg-blue-50 text-blue-600 border-blue-200",
+  amber:  "bg-amber-50 text-amber-600 border-amber-200",
+  pink:   "bg-pink-50 text-pink-600 border-pink-200",
+  violet: "bg-violet-50 text-violet-600 border-violet-200",
+  teal:   "bg-teal-50 text-teal-600 border-teal-200",
+  orange: "bg-orange-50 text-orange-600 border-orange-200",
+  rose:   "bg-rose-50 text-rose-600 border-rose-200",
+};
 
 const schema = z.object({
   name: z.string().min(1, "اسم المنتج مطلوب"),
@@ -36,6 +60,7 @@ const schema = z.object({
   isPreOrder: z.boolean().default(false),
   preOrderMessageAr: z.string().optional(),
   preOrderDeliveryDays: z.coerce.number().optional(),
+  productType: z.string().default("physical"),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -46,8 +71,14 @@ export default function NewProductPage() {
   const queryClient = useQueryClient();
   const [serverError, setServerError] = useState("");
   const [createdProductId, setCreatedProductId] = useState<string | null>(null);
-  const watchedPrice = 0;
-  const watchedStock = 0;
+  const [productType, setProductType] = useState<ProductTypeId>("physical");
+  const [showNewCat, setShowNewCat] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [newCatNameAr, setNewCatNameAr] = useState("");
+  const [catError, setCatError] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [aiProductName, setAiProductName] = useState("");
 
   const { data: categories } = useQuery<Category[]>({
     queryKey: ["categories", store?.id],
@@ -61,20 +92,63 @@ export default function NewProductPage() {
   const {
     register,
     handleSubmit,
-    watch,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormData>({
     resolver: zodResolver(schema) as Resolver<FormData>,
-    defaultValues: { stock: 0, trackStock: true, isActive: true, isDigital: false },
+    defaultValues: { stock: 0, trackStock: true, isActive: true, isDigital: false, productType: "physical" },
   });
 
-  const isDigital = watch("isDigital");
-  const isPreOrder = watch("isPreOrder");
+  const handleAiGenerate = async () => {
+    if (!aiProductName.trim() || !store) return;
+    setAiLoading(true);
+    try {
+      const res = await api.post("/ai/product-writer", {
+        storeId: store.id,
+        productName: aiProductName.trim(),
+        language: "both",
+      });
+      const d = res.data?.data;
+      if (d?.ar?.longDescription) setValue("descriptionAr", d.ar.longDescription);
+      if (d?.en?.longDescription) setValue("description", d.en.longDescription);
+      if (d?.ar?.shortDescription && !aiProductName.includes("|")) setValue("nameAr", aiProductName.trim());
+      setShowAiPanel(false);
+      setAiProductName("");
+    } catch {
+      // silent fail
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const createCategoryMutation = useMutation({
+    mutationFn: (data: { name: string; nameAr: string }) =>
+      api.post("/categories", { ...data, storeId: store!.id }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["categories", store?.id] });
+      const newId = res.data?.id ?? res.data?.category?.id ?? "";
+      setValue("categoryId", newId);
+      setShowNewCat(false);
+      setNewCatName("");
+      setNewCatNameAr("");
+      setCatError("");
+    },
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { message?: string } } };
+      setCatError(e?.response?.data?.message ?? "فشل إنشاء الفئة");
+    },
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return api.post("/products", { ...(data as any), storeId: store!.id });
+      return api.post("/products", {
+        ...(data as any),
+        storeId: store!.id,
+        productType,
+        isDigital: productType === "digital",
+        isPreOrder: productType === "preorder",
+        trackStock: productType !== "digital" && productType !== "service",
+      });
     },
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
@@ -112,8 +186,40 @@ export default function NewProductPage() {
             {/* Main Info */}
             <div className="xl:col-span-2 space-y-6">
               <Card>
-                <CardHeader title="معلومات المنتج الأساسية" />
+                <CardHeader title="معلومات المنتج الأساسية" action={
+                  <button
+                    type="button"
+                    onClick={() => setShowAiPanel(v => !v)}
+                    className="flex items-center gap-1.5 rounded-lg bg-violet-50 border border-violet-200 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100 transition"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    توليد بالذكاء الاصطناعي
+                  </button>
+                } />
                 <CardBody className="space-y-4">
+                  {showAiPanel && (
+                    <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 space-y-2">
+                      <p className="text-xs font-medium text-violet-700">أدخل اسم المنتج وسيولّد الذكاء الاصطناعي الوصف عربي + إنجليزي تلقائياً</p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="مثال: حقيبة جلد يدوية الصنع"
+                          value={aiProductName}
+                          onChange={e => setAiProductName(e.target.value)}
+                          onKeyDown={e => e.key === "Enter" && handleAiGenerate()}
+                          className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                        <button
+                          type="button"
+                          disabled={!aiProductName.trim() || aiLoading}
+                          onClick={handleAiGenerate}
+                          className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1"
+                        >
+                          {aiLoading ? "جاري..." : <><Sparkles className="h-3 w-3" />توليد</>}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Input
                       label="اسم المنتج (إنجليزي)"
@@ -248,6 +354,102 @@ export default function NewProductPage() {
 
             {/* Sidebar */}
             <div className="space-y-6">
+              {/* Product Type */}
+              <Card>
+                <CardHeader title="نوع المنتج" />
+                <CardBody className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    {PRODUCT_TYPES.map((t) => {
+                      const Icon = t.icon;
+                      const isSelected = productType === t.id;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setProductType(t.id)}
+                          className={`flex items-start gap-2 rounded-xl border-2 p-2.5 text-right transition-all ${
+                            isSelected
+                              ? "border-indigo-500 bg-indigo-50 shadow-sm"
+                              : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                          }`}
+                        >
+                          <div className={`mt-0.5 shrink-0 h-7 w-7 rounded-lg border flex items-center justify-center ${isSelected ? ICON_COLORS[t.color] : "bg-slate-100 text-slate-400 border-slate-200"}`}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className={`text-xs font-semibold leading-tight ${isSelected ? "text-indigo-700" : "text-slate-700"}`}>{t.label}</p>
+                            <p className="text-[10px] text-slate-400 leading-tight mt-0.5 truncate">{t.desc}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Conditional fields per type */}
+                  {productType === "digital" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <Input
+                        label="رابط الملف الرقمي"
+                        placeholder="https://example.com/file.pdf"
+                        type="url"
+                        hint="رابط مباشر للملف بعد الشراء"
+                        {...register("digitalFileUrl")}
+                      />
+                    </div>
+                  )}
+
+                  {productType === "preorder" && (
+                    <div className="border-t border-slate-100 pt-3 space-y-3">
+                      <Input
+                        label="رسالة الطلب المسبق (عربي)"
+                        placeholder="سيُشحن خلال 14 يوم"
+                        hint="تظهر للعملاء في صفحة المنتج"
+                        {...register("preOrderMessageAr")}
+                      />
+                      <Input
+                        label="مدة التسليم (أيام)"
+                        type="number"
+                        min="1"
+                        placeholder="14"
+                        {...register("preOrderDeliveryDays")}
+                      />
+                    </div>
+                  )}
+
+                  {productType === "gift_card" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-pink-50 border border-pink-100 rounded-xl px-3 py-2">
+                        أدخل قيمة البطاقة في حقل السعر. العميل يحصل على كود يستخدمه بقيمة مساوية للسعر.
+                      </p>
+                    </div>
+                  )}
+
+                  {productType === "subscription" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
+                        الاشتراكات المتكررة. السعر سيُحصّل دورياً — الربط بالبوابة يتم من صفحة الطلبات.
+                      </p>
+                    </div>
+                  )}
+
+                  {productType === "bundle" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-orange-50 border border-orange-100 rounded-xl px-3 py-2">
+                        أضف المنتجات في وصف المجموعة. ربط المنتجات معاً سيكون متاحاً قريباً.
+                      </p>
+                    </div>
+                  )}
+
+                  {productType === "custom" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
+                        العميل سيتمكن من إضافة ملاحظة تخصيص عند الطلب (اسم، لون، مقاس خاص).
+                      </p>
+                    </div>
+                  )}
+                </CardBody>
+              </Card>
+
               <Card>
                 <CardHeader title="الحالة والتصنيف" />
                 <CardBody className="space-y-4">
@@ -265,9 +467,17 @@ export default function NewProductPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                      الفئة
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <label className="text-sm font-medium text-slate-700">الفئة</label>
+                      <button
+                        type="button"
+                        onClick={() => { setShowNewCat(v => !v); setCatError(""); }}
+                        className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800"
+                      >
+                        <Plus className="h-3 w-3" />
+                        {showNewCat ? "إلغاء" : "فئة جديدة"}
+                      </button>
+                    </div>
                     <select
                       className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       {...register("categoryId")}
@@ -279,65 +489,48 @@ export default function NewProductPage() {
                         </option>
                       ))}
                     </select>
-                  </div>
-
-                  {/* Digital Product */}
-                  <div className="border-t border-slate-100 pt-3 space-y-3">
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        id="isDigital"
-                        className="h-4 w-4 rounded border-slate-300 text-indigo-600"
-                        {...register("isDigital")}
-                      />
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">منتج رقمي</p>
-                        <p className="text-xs text-slate-500">ملف قابل للتحميل بعد الشراء</p>
+                    {showNewCat && (
+                      <div className="mt-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+                        <input
+                          type="text"
+                          placeholder="Category name (English)"
+                          value={newCatName}
+                          onChange={(e) => setNewCatName(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <input
+                          type="text"
+                          placeholder="اسم الفئة (عربي)"
+                          value={newCatNameAr}
+                          onChange={(e) => setNewCatNameAr(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        {catError && <p className="text-xs text-red-600">{catError}</p>}
+                        <button
+                          type="button"
+                          disabled={!newCatName.trim() || createCategoryMutation.isPending}
+                          onClick={() => createCategoryMutation.mutate({ name: newCatName.trim(), nameAr: newCatNameAr.trim() })}
+                          className="w-full rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          {createCategoryMutation.isPending ? "جارٍ الإضافة..." : "إضافة الفئة"}
+                        </button>
                       </div>
-                    </label>
-                    {isDigital && (
-                      <Input
-                        label="رابط الملف"
-                        placeholder="https://example.com/file.pdf"
-                        type="url"
-                        hint="رابط مباشر للملف الرقمي"
-                        {...register("digitalFileUrl")}
-                      />
                     )}
                   </div>
 
-                  {/* Pre-order */}
-                  <div className="border-t border-slate-100 pt-3 space-y-3">
-                    <label className="flex items-center gap-3 cursor-pointer">
+                  {(productType === "physical" || productType === "preorder" || productType === "bundle") && (
+                    <div className="flex items-center gap-3 border-t border-slate-100 pt-3">
                       <input
                         type="checkbox"
-                        id="isPreOrder"
+                        id="trackStock"
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600"
-                        {...register("isPreOrder")}
+                        {...register("trackStock")}
                       />
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">طلب مسبق (Pre-order)</p>
-                        <p className="text-xs text-slate-500">السماح بالطلب قبل توفر المنتج</p>
-                      </div>
-                    </label>
-                    {isPreOrder && (
-                      <>
-                        <Input
-                          label="رسالة الطلب المسبق (عربي)"
-                          placeholder="سيُشحن خلال 14 يوم"
-                          hint="تظهر للعملاء في صفحة المنتج"
-                          {...register("preOrderMessageAr")}
-                        />
-                        <Input
-                          label="مدة التسليم (أيام)"
-                          type="number"
-                          min="1"
-                          placeholder="14"
-                          {...register("preOrderDeliveryDays")}
-                        />
-                      </>
-                    )}
-                  </div>
+                      <label htmlFor="trackStock" className="text-sm font-medium text-slate-700">
+                        تتبع المخزون
+                      </label>
+                    </div>
+                  )}
                 </CardBody>
               </Card>
 

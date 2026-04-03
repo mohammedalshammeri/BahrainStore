@@ -36,6 +36,8 @@ export interface Store {
   subdomain: string;
   customDomain: string | null;
   logo: string | null;
+  favicon: string | null;
+  ogImage: string | null;
   description: string | null;
   currency: string;
   language: string;

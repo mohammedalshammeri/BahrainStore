@@ -1,0 +1,78 @@
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bazar
+      POSTGRES_USER: bazar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bazar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (Fastify API) ─────────────────────────────────────────────────────
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://bazar:${POSTGRES_PASSWORD}@postgres:5432/bazar
+      JWT_SECRET: ${JWT_SECRET}
+      BACKEND_URL: https://api.${DOMAIN}
+      PORT: 3001
+      NODE_ENV: production
+    volumes:
+      - uploads:/app/public/uploads
+    # Run any pending migrations on every start
+    command: >
+      sh -c "npx prisma migrate deploy && node dist/index.js"
+
+  # ── Dashboard (Next.js merchant panel) ───────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+      PORT: 3000
+
+  # ── Storefront (Next.js customer-facing) ─────────────────────────────────────
+  storefront:
+    build:
+      context: ./storefront
+      args:
+        NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+      PORT: 3002
+
+  # ── Nginx reverse proxy ───────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - uploads:/var/www/uploads:ro
+    depends_on:
+      - backend
+      - dashboard
+      - storefront
+
+volumes:
+  pgdata:
+  uploads:

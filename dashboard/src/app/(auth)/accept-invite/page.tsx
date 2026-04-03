@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -22,7 +22,7 @@ const schema = z
 
 type FormData = z.infer<typeof schema>;
 
-export default function AcceptInvitePage() {
+function AcceptInviteContent() {
   const params = useSearchParams();
   const router = useRouter();
   const token = params.get("token") ?? "";
@@ -104,5 +104,13 @@ export default function AcceptInvitePage() {
         </Button>
       </form>
     </div>
+  );
+}
+
+export default function AcceptInvitePage() {
+  return (
+    <Suspense fallback={<div className="text-center py-16 text-slate-400">جاري التحميل...</div>}>
+      <AcceptInviteContent />
+    </Suspense>
   );
 }

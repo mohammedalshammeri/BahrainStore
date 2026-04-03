@@ -5,6 +5,9 @@ import rateLimit from '@fastify/rate-limit'
 import jwt from '@fastify/jwt'
 import swagger from '@fastify/swagger'
 import swaggerUi from '@fastify/swagger-ui'
+import staticFiles from '@fastify/static'
+import multipart from '@fastify/multipart'
+import path from 'path'
 
 import { authRoutes } from './routes/auth.routes'
 import { storeRoutes } from './routes/store.routes'
@@ -42,6 +45,33 @@ import { emailMarketingRoutes } from './routes/email-marketing.routes'
 import { announcementRoutes } from './routes/announcement.routes'
 import { upsellRoutes } from './routes/upsell.routes'
 import { sitemapRoutes } from './routes/sitemap.routes'
+import { domainRoutes } from './routes/domain.routes'
+import { subscriptionProductRoutes } from './routes/subscription-products.routes'
+import { newPaymentRoutes } from './routes/new-payment.routes'
+import { smsRoutes, pushNotificationRoutes } from './routes/sms-push.routes'
+import { advancedCouponRoutes } from './routes/advanced-coupon.routes'
+import { posRoutes } from './routes/pos.routes'
+import { importRoutes } from './routes/import.routes'
+import { healthDashboardRoutes } from './routes/platform-health.routes'
+import { themeStoreRoutes } from './routes/theme-store.routes'
+import { partnerRoutes } from './routes/partner.routes'
+import { liveCommerceRoutes, liveChatSupportRoutes } from './routes/live-commerce.routes'
+import { warehouseRoutes } from './routes/warehouse.routes'
+import { currencyRoutes } from './routes/currency.routes'
+import { zatcaRoutes, b2bInvoiceRoutes } from './routes/zatca-b2b.routes'
+import { recommendationRoutes } from './routes/recommendations.routes'
+import { socialIntegrationRoutes, googleShoppingFeedRoutes } from './routes/social-integrations.routes'
+import { shippingRoutes } from './routes/shipping.routes'
+import { graphqlRoutes } from './routes/graphql'
+import { smartSearchRoutes } from './routes/smart-search.routes'
+import { platformImportRoutes } from './routes/platform-import.routes'
+import { benefitPayRoutes } from './routes/benefitpay.routes'
+import { aiRoutes } from './routes/ai.routes'
+import { whatsappCommerceRoutes } from './routes/whatsapp-commerce.routes'
+import { bazarFinanceRoutes } from './routes/bazar-finance.routes'
+import { restaurantRoutes } from './routes/restaurant.routes'
+import { badgesRoutes, alertsRoutes } from './routes/badges-alerts.routes'
+import { verificationRoutes } from './routes/verification.routes'
 
 export async function buildServer() {
   const app = Fastify({
@@ -51,10 +81,28 @@ export async function buildServer() {
   // ── Security ──────────────────────────────────
   await app.register(helmet, { contentSecurityPolicy: false })
 
+  // ── Static files (uploaded images) ───────────
+  const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
+  await app.register(staticFiles, { root: uploadsDir, prefix: '/uploads/', decorateReply: false })
+
+  // ── Multipart (file uploads) ──────────────────
+  await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } })
+
   await app.register(cors, {
-    origin: process.env.NODE_ENV === 'production'
-      ? ['https://bazar.bh', 'https://dashboard.bazar.bh']
-      : true,
+    origin: (origin, cb) => {
+      const allowed = [
+        'https://bazar.bh',
+        'https://dashboard.bazar.bh',
+        'https://storefront.bazar.bh',
+        /^https?:\/\/localhost(:\d+)?$/,
+        /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+      ]
+      if (!origin || allowed.some(p => typeof p === 'string' ? p === origin : p.test(origin))) {
+        cb(null, true)
+      } else {
+        cb(new Error('Not allowed by CORS'), false)
+      }
+    },
     credentials: true,
   })
 
@@ -146,6 +194,58 @@ export async function buildServer() {
   await app.register(announcementRoutes, { prefix: '/api/v1' })
   await app.register(upsellRoutes, { prefix: '/api/v1' })
   await app.register(sitemapRoutes, { prefix: '/api/v1' })
+
+  // ── New Feature Routes ────────────────────────
+  await app.register(domainRoutes, { prefix: '/api/v1/domain' })
+  await app.register(subscriptionProductRoutes, { prefix: '/api/v1/subscription-products' })
+  await app.register(newPaymentRoutes, { prefix: '/api/v1/payments' })
+  await app.register(smsRoutes, { prefix: '/api/v1/sms' })
+  await app.register(pushNotificationRoutes, { prefix: '/api/v1/push' })
+  await app.register(advancedCouponRoutes, { prefix: '/api/v1' })
+  await app.register(posRoutes, { prefix: '/api/v1/pos' })
+  await app.register(importRoutes, { prefix: '/api/v1/import' })
+  await app.register(healthDashboardRoutes, { prefix: '/api/v1/platform' })
+  await app.register(themeStoreRoutes, { prefix: '/api/v1/themes' })
+  await app.register(partnerRoutes, { prefix: '/api/v1/partners' })
+  await app.register(liveCommerceRoutes, { prefix: '/api/v1/live' })
+  await app.register(liveChatSupportRoutes, { prefix: '/api/v1/live-chat' })
+  await app.register(warehouseRoutes, { prefix: '/api/v1/warehouses' })
+  await app.register(currencyRoutes, { prefix: '/api/v1/currencies' })
+  await app.register(zatcaRoutes, { prefix: '/api/v1/zatca' })
+  await app.register(b2bInvoiceRoutes, { prefix: '/api/v1/b2b/invoices' })
+  await app.register(recommendationRoutes, { prefix: '/api/v1/recommendations' })
+  await app.register(socialIntegrationRoutes, { prefix: '/api/v1/social' })
+  await app.register(googleShoppingFeedRoutes, { prefix: '/api/v1/feed' })
+  await app.register(shippingRoutes, { prefix: '/api/v1/shipping' })
+  await app.register(graphqlRoutes, { prefix: '/api/v1/graphql' })
+  await app.register(smartSearchRoutes, { prefix: '/api/v1/search' })
+  await app.register(platformImportRoutes, { prefix: '/api/v1/platform-import' })
+  await app.register(benefitPayRoutes, { prefix: '/api/v1/benefitpay' })
+
+  // ── AI & New Features ─────────────────────────────────────────────────────
+  await app.register(aiRoutes, { prefix: '/api/v1/ai' })
+  await app.register(whatsappCommerceRoutes, { prefix: '/api/v1/whatsapp-commerce' })
+  await app.register(bazarFinanceRoutes, { prefix: '/api/v1/bazar-finance' })
+  await app.register(restaurantRoutes, { prefix: '/api/v1/restaurant' })
+  await app.register(badgesRoutes, { prefix: '/api/v1/badges' })
+  await app.register(alertsRoutes, { prefix: '/api/v1/alerts' })
+  await app.register(verificationRoutes, { prefix: '/api/v1/verification' })
+
+  // ── Public Platform Status (no auth) ─────────────────────────────────────
+  app.get('/api/v1/status', async (_req, reply) => {
+    const { prisma } = await import('./lib/prisma')
+    const incidents = await prisma.platformIncident.findMany({
+      where: { isPublic: true },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    })
+    const hasActiveOutage = incidents.some((i) => i.status !== 'RESOLVED' && (i.type === 'OUTAGE' || i.type === 'DEGRADED'))
+    return reply.send({
+      status: hasActiveOutage ? 'degraded' : 'operational',
+      incidents,
+      generatedAt: new Date().toISOString(),
+    })
+  })
 
   // ── 404 Handler ───────────────────────────────
   app.setNotFoundHandler((_req, reply) => {

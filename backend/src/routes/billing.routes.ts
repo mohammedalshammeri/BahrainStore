@@ -250,4 +250,105 @@ export async function billingRoutes(app: FastifyInstance) {
 
     return reply.send({ hasApiKey: Boolean(store.apiKey), maskedKey: masked })
   })
+
+  // ── LAYER 12: Merchant Subscription Payments ─────────────────────────────
+
+  // GET merchant payment history for a store
+  app.get('/subscription/payments', { preHandler: authenticate }, async (request, reply) => {
+    const merchantId = (request.user as { id: string }).id
+    const { storeId } = request.query as { storeId?: string }
+    if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
+
+    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { id: true } })
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const payments = await prisma.merchantPayment.findMany({
+      where: { storeId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    })
+    return reply.send({ payments })
+  })
+
+  // POST initiate subscription payment (creates payment record, returns Tap hosted URL)
+  app.post('/subscription/initiate', { preHandler: authenticate }, async (request, reply) => {
+    const merchantId = (request.user as { id: string }).id
+    const { storeId, invoiceId, amount, paymentMethod } = request.body as {
+      storeId: string; invoiceId?: string; amount: number; paymentMethod?: string
+    }
+    if (!storeId || !amount) return reply.status(400).send({ error: 'storeId و amount مطلوبان' })
+
+    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { id: true, name: true } })
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    // Create a pending payment record
+    const payment = await prisma.merchantPayment.create({
+      data: {
+        storeId,
+        merchantId,
+        invoiceId: invoiceId ?? null,
+        amount,
+        currency: 'BHD',
+        paymentMethod: paymentMethod ?? null,
+        status: 'PENDING',
+      },
+    })
+
+    // In production: call Tap API to create a charge and get hosted payment URL
+    // For now, return a placeholder redirect URL and the payment record
+    const tapApiKey = process.env.TAP_SECRET_KEY
+    let tapPaymentUrl: string | null = null
+
+    if (tapApiKey) {
+      try {
+        const res = await fetch('https://api.tap.company/v2/charges', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tapApiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount,
+            currency: 'BHD',
+            description: `اشتراك ${store.name}`,
+            redirect: { url: `${process.env.DASHBOARD_URL ?? 'https://app.bazar.bh'}/billing?payment=${payment.id}` },
+            source: { id: 'src_all' },
+            reference: { merchant: payment.id },
+          }),
+        })
+        if (res.ok) {
+          const data = await res.json() as { transaction?: { url?: string }; id?: string }
+          tapPaymentUrl = data.transaction?.url ?? null
+          if (data.id) {
+            await prisma.merchantPayment.update({ where: { id: payment.id }, data: { gatewayRef: data.id, tapPaymentUrl } })
+          }
+        }
+      } catch (err) {
+        // Non-fatal — return payment record without redirect URL
+      }
+    }
+
+    return reply.status(201).send({ payment, tapPaymentUrl })
+  })
+
+  // POST Tap webhook callback — update payment status
+  app.post('/subscription/tap-callback', async (request, reply) => {
+    const { id: chargeId, status } = request.body as { id?: string; status?: string }
+    if (!chargeId || !status) return reply.status(400).send({ error: 'invalid payload' })
+
+    const payment = await prisma.merchantPayment.findFirst({ where: { gatewayRef: chargeId } })
+    if (!payment) return reply.send({ ok: true }) // ignore unknown
+
+    if (status === 'CAPTURED') {
+      await prisma.merchantPayment.update({ where: { id: payment.id }, data: { status: 'PAID', paidAt: new Date() } })
+      // Extend plan by 30 days from today or from current expiry
+      const store = await prisma.store.findUnique({ where: { id: payment.storeId }, select: { planExpiresAt: true } })
+      const base = store?.planExpiresAt && store.planExpiresAt > new Date() ? store.planExpiresAt : new Date()
+      const newExpiry = new Date(base)
+      newExpiry.setDate(newExpiry.getDate() + 30)
+      await prisma.store.update({ where: { id: payment.storeId }, data: { planExpiresAt: newExpiry, gracePeriodEnds: null, paymentRetryCount: 0 } })
+    } else if (status === 'FAILED' || status === 'CANCELLED') {
+      await prisma.merchantPayment.update({ where: { id: payment.id }, data: { status: 'FAILED', failedAt: new Date(), retryCount: { increment: 1 } } })
+      await prisma.store.update({ where: { id: payment.storeId }, data: { paymentRetryCount: { increment: 1 } } })
+    }
+
+    return reply.send({ ok: true })
+  })
 }

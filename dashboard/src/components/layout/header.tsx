@@ -10,6 +10,7 @@ import Image from "next/image";
 interface HeaderProps {
   title: string;
   subtitle?: string;
+  action?: React.ReactNode;
 }
 
 interface SearchResult {
@@ -21,7 +22,7 @@ interface SearchResult {
   href: string;
 }
 
-export function Header({ title, subtitle }: HeaderProps) {
+export function Header({ title, subtitle, action }: HeaderProps) {
   const { store } = useAuthStore();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -105,15 +106,20 @@ export function Header({ title, subtitle }: HeaderProps) {
   };
 
   return (
-    <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6">
+    <header className="flex h-16 items-center justify-between border-b border-slate-200/80 bg-white px-6"
+      style={{ boxShadow: '0 1px 0 rgba(226,232,240,0.8), 0 1px 4px rgba(0,0,0,0.03)' }}
+    >
       {/* Left: Title */}
       <div>
-        <h1 className="text-lg font-bold text-slate-900">{title}</h1>
-        {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
+        <h1 className="text-base font-bold text-slate-900 leading-tight">{title}</h1>
+        {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
       </div>
 
       {/* Right: Actions */}
       <div className="flex items-center gap-3">
+        {/* Custom action (e.g. page-level buttons) */}
+        {action && <div className="flex items-center">{action}</div>}
+
         {/* Search */}
         <div ref={containerRef} className="relative hidden md:block">
           <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 pointer-events-none" />
@@ -123,7 +129,7 @@ export function Header({ title, subtitle }: HeaderProps) {
             onChange={(e) => setQuery(e.target.value)}
             onFocus={() => results.length > 0 && setOpen(true)}
             placeholder="بحث سريع..."
-            className="h-9 w-64 rounded-lg border border-slate-200 bg-slate-50 pr-9 pl-7 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="h-9 w-64 rounded-xl border border-slate-200 bg-slate-50/80 pr-9 pl-7 text-sm placeholder:text-slate-400 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 focus:bg-white focus:w-72"
           />
           {loading && <Loader2 className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-slate-400" />}
           {query && !loading && (
@@ -136,7 +142,7 @@ export function Header({ title, subtitle }: HeaderProps) {
           )}
           {/* Dropdown */}
           {open && results.length > 0 && (
-            <div className="absolute top-full mt-2 left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden min-w-[300px]">
+            <div className="absolute top-full mt-2 left-0 right-0 bg-white border border-slate-200/80 rounded-2xl shadow-card-md z-50 overflow-hidden min-w-[320px] animate-slide-up">
               {results.map((r) => (
                 <Link
                   key={`${r.type}-${r.id}`}
@@ -165,16 +171,16 @@ export function Header({ title, subtitle }: HeaderProps) {
         </div>
 
         {/* Notifications */}
-        <button className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors">
+        <button className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700 hover:border-slate-300 transition-all duration-150 shadow-xs">
           <Bell className="h-4 w-4" />
-          <span className="absolute -top-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+          <span className="absolute -top-0.5 -left-0.5 flex h-[18px] w-[18px] items-center justify-center rounded-full gradient-brand text-[9px] font-bold text-white shadow-brand-sm">
             3
           </span>
         </button>
 
         {/* Store plan badge */}
         {store?.plan && (
-          <span className="hidden rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700 sm:inline-flex">
+          <span className="hidden rounded-full gradient-brand px-3 py-1 text-xs font-semibold text-white shadow-brand-sm sm:inline-flex">
             {store.plan === "FREE" ? "مجاني" : store.plan}
           </span>
         )}

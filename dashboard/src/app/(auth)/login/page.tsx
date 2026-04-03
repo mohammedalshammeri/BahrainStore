@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -19,7 +19,7 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const googleError = searchParams.get("error");
@@ -82,7 +82,8 @@ export default function LoginPage() {
     setMerchant(data.merchant as Parameters<typeof setMerchant>[0]);
     try {
       const storeRes = await api.get("/stores");
-      if (storeRes.data?.[0]) setStore(storeRes.data[0]);
+      const stores = storeRes.data?.stores ?? storeRes.data;
+      if (Array.isArray(stores) && stores[0]) setStore(stores[0]);
     } catch {
       // No store yet
     }
@@ -217,6 +218,14 @@ export default function LoginPage() {
         </Link>
       </p>
     </>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center py-20"><div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" /></div>}>
+      <LoginContent />
+    </Suspense>
   );
 }
 

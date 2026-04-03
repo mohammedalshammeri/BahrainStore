@@ -353,6 +353,11 @@ export async function orderRoutes(app: FastifyInstance) {
     const merchantId = (request.user as any).id
     const { status, trackingNumber, shippingCompany } = request.body as any
 
+    const VALID_STATUSES = ['PENDING', 'CONFIRMED', 'PROCESSING', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'REFUNDED', 'RETURNED']
+    if (status && !VALID_STATUSES.includes(status)) {
+      return reply.status(400).send({ error: 'حالة الطلب غير صحيحة', validStatuses: VALID_STATUSES })
+    }
+
     const order = await prisma.order.findUnique({ where: { id }, include: { store: true } })
     if (!order || order.store.merchantId !== merchantId) {
       return reply.status(404).send({ error: 'الطلب غير موجود' })

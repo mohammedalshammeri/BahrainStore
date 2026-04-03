@@ -15,16 +15,45 @@ async function resolveApiKey(request: any, reply: any): Promise<string | null> {
   }
   const store = await prisma.store.findFirst({
     where: { apiKey, isActive: true },
-    select: { id: true },
+    select: { id: true, apiKeyEnabled: true },
   })
   if (!store) {
     reply.status(401).send({ error: 'مفتاح API غير صحيح أو المتجر غير نشط' })
     return null
   }
+  if (!store.apiKeyEnabled) {
+    reply.status(403).send({ error: 'مفتاح API معطّل، يُرجى التواصل مع الدعم' })
+    return null
+  }
+  // cache storeId on the request for usage logging hook
+  request._storeId = store.id
   return store.id
 }
 
 export async function publicApiRoutes(app: FastifyInstance) {
+  // ── Usage logging hooks ─────────────────────
+  app.addHook('onRequest', async (request) => {
+    (request as any)._apiStartMs = Date.now()
+  })
+
+  app.addHook('onSend', async (request: any, reply) => {
+    if (!request._storeId) return
+    const duration = Date.now() - (request._apiStartMs ?? Date.now())
+    const url = new URL(request.url, 'http://localhost')
+    const endpoint = url.pathname.replace(/^\/api\/public\/v1/, '') || '/'
+    prisma.apiUsageLog.create({
+      data: {
+        storeId: request._storeId,
+        endpoint,
+        method: request.method,
+        statusCode: reply.statusCode,
+        duration,
+        ip: (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ?? request.ip ?? null,
+        userAgent: (request.headers['user-agent'] as string | undefined) ?? null,
+        version: 'v1',
+      },
+    }).catch(() => { /* fire-and-forget */ })
+  })
   // ── Info ────────────────────────────────────
   app.get('/', {
     schema: {
@@ -350,5 +379,20 @@ export async function publicApiRoutes(app: FastifyInstance) {
     if (!customer) return reply.status(404).send({ error: 'العميل غير موجود' })
     return reply.send({ customer })
   })
-}
 
+  // ── Public changelog (no auth required) ──────
+  app.get('/changelog', {
+    schema: {
+      tags: ['Info'],
+      summary: 'API changelog',
+      description: 'List published API changelog entries',
+    },
+  }, async (_req, reply) => {
+    const entries = await prisma.apiChangelog.findMany({
+      where: { isPublished: true },
+      orderBy: { publishedAt: 'desc' },
+      select: { id: true, version: true, title: true, description: true, type: true, publishedAt: true },
+    })
+    return reply.send({ entries })
+  })
+}

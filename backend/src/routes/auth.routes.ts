@@ -52,10 +52,18 @@ export async function authRoutes(app: FastifyInstance) {
 
     const passwordHash = await bcrypt.hash(password, 12)
 
-    const merchant = await prisma.merchant.create({
-      data: { email, phone, passwordHash, firstName, lastName },
-      select: { id: true, email: true, phone: true, firstName: true, lastName: true, isAdmin: true, createdAt: true },
-    })
+    let merchant
+    try {
+      merchant = await prisma.merchant.create({
+        data: { email, phone, passwordHash, firstName, lastName },
+        select: { id: true, email: true, phone: true, firstName: true, lastName: true, isAdmin: true, createdAt: true },
+      })
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        return reply.status(409).send({ error: 'البريد الإلكتروني أو رقم الهاتف مستخدم بالفعل' })
+      }
+      throw err
+    }
 
     const { accessToken, refreshToken } = await generateTokens(app, merchant.id)
 
@@ -76,15 +84,45 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { email, password } = result.data
 
-    const merchant = await prisma.merchant.findUnique({ where: { email } })
+    const reqIp = (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
+      ?? (request as any).ip ?? 'unknown'
+    const userAgent = (request.headers['user-agent'] as string | undefined) ?? null
+
+    // Check IP ban (too many failures from this IP)
+    const settings = await prisma.securitySettings.findUnique({ where: { id: 'platform' } })
+    const maxAttempts = settings?.maxLoginAttempts ?? 5
+    const banMinutes  = settings?.banDurationMinutes ?? 30
+    const banSince    = new Date(Date.now() - banMinutes * 60 * 1000)
+    const recentFails = await prisma.loginAttempt.count({
+      where: { ip: reqIp, success: false, createdAt: { gte: banSince } },
+    })
+    if (recentFails >= maxAttempts) {
+      return reply.status(429).send({ error: `تم تجاوز الحد المسموح من المحاولات. يُرجى الانتظار ${banMinutes} دقيقة.`, code: 'IP_BANNED' })
+    }
+
+    const merchant = await prisma.merchant.findUnique({
+      where: { email },
+      select: { id: true, email: true, phone: true, firstName: true, lastName: true, passwordHash: true, isActive: true, isAdmin: true, twoFactorEnabled: true, lastLoginIp: true },
+    })
 
     if (!merchant || !(await bcrypt.compare(password, merchant.passwordHash))) {
+      // Record failed attempt (fire-and-forget)
+      prisma.loginAttempt.create({ data: { ip: reqIp, email, success: false, userAgent } }).catch(() => {})
       return reply.status(401).send({ error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' })
     }
 
     if (!merchant.isActive) {
+      prisma.loginAttempt.create({ data: { ip: reqIp, email, success: false, userAgent } }).catch(() => {})
       return reply.status(403).send({ error: 'الحساب موقوف، تواصل مع الدعم' })
     }
+
+    // Record successful attempt + update login metadata (fire-and-forget)
+    const isNewIp = merchant.lastLoginIp && merchant.lastLoginIp !== reqIp
+    prisma.loginAttempt.create({ data: { ip: reqIp, email, success: true, userAgent } }).catch(() => {})
+    prisma.merchant.update({
+      where: { id: merchant.id },
+      data: { lastLoginIp: reqIp, lastLoginAt: new Date() },
+    }).catch(() => {})
 
     // If 2FA is enabled, issue a short-lived temp token instead of full tokens
     if (merchant.twoFactorEnabled) {
@@ -99,6 +137,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     return reply.send({
       message: 'تم تسجيل الدخول بنجاح',
+      newIpDetected: !!isNewIp,
       merchant: {
         id: merchant.id,
         email: merchant.email,

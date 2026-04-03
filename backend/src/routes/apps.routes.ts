@@ -137,8 +137,8 @@ async function ensureOfficialApps() {
 }
 
 export async function appsRoutes(app: FastifyInstance) {
-  // Seed official apps on first load
-  await ensureOfficialApps().catch(() => {})
+  // Seed official apps in background (don't await — avoids plugin timeout)
+  ensureOfficialApps().catch(() => {})
 
   // ── List all apps ─────────────────────────────
   app.get('/', async (request, reply) => {

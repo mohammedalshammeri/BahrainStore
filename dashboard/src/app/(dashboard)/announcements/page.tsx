@@ -1,6 +1,8 @@
 ﻿'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuthStore } from '@/store/auth.store'
 import { api } from '@/lib/api'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -34,6 +36,15 @@ const TYPE_COLORS: Record<string, string> = {
 }
 
 export default function AnnouncementsPage() {
+  const router = useRouter()
+  const { merchant } = useAuthStore()
+
+  useEffect(() => {
+    if (merchant !== null && !(merchant as any).isAdmin) {
+      router.replace('/')
+    }
+  }, [merchant, router])
+
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)

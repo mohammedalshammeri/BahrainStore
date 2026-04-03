@@ -16,6 +16,7 @@ const createStoreSchema = z.object({
 const updateStoreSchema = createStoreSchema.partial().extend({
   logo: z.string().url().optional(),
   favicon: z.string().url().optional(),
+  ogImage: z.string().url().optional(),
   language: z.enum(['AR', 'EN', 'BOTH']).optional(),
   timezone: z.string().optional(),
 })
@@ -128,11 +129,11 @@ export async function storeRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'المتجر غير موجود' })
     }
 
-    const { logo, favicon, language, timezone, ...storeData } = result.data
+    const { logo, favicon, ogImage, language, timezone, ...storeData } = result.data
 
     const store = await prisma.store.update({
       where: { id },
-      data: { ...storeData, logo, favicon, language, timezone },
+      data: { ...storeData, logo, favicon, ogImage, language, timezone },
       include: { settings: true },
     })
 

@@ -14,8 +14,33 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardBody } from "@/components/ui/card";
 import type { Category } from "@/types";
-import { ArrowRight, Save, CheckCircle } from "lucide-react";
+import { VariantEditor } from "@/components/products/variant-editor";
+import { ArrowRight, Save, CheckCircle, ShoppingBag, Download, Clock, Gift, RefreshCw, Wrench, Layers, SlidersHorizontal, Plus } from "lucide-react";
 import Link from "next/link";
+
+const PRODUCT_TYPES = [
+  { id: "physical",     label: "مادي",        desc: "منتج يُشحن للعميل",          icon: ShoppingBag,       color: "indigo"  },
+  { id: "digital",      label: "رقمي",         desc: "ملف قابل للتحميل",           icon: Download,          color: "blue"    },
+  { id: "preorder",     label: "طلب مسبق",    desc: "يُباع قبل توفّره",            icon: Clock,             color: "amber"   },
+  { id: "gift_card",    label: "بطاقة هدية",  desc: "رصيد يُستخدم في المتجر",     icon: Gift,              color: "pink"    },
+  { id: "subscription", label: "اشتراك",       desc: "دفع دوري متكرر",             icon: RefreshCw,         color: "violet"  },
+  { id: "service",      label: "خدمة",         desc: "لا يحتاج شحناً",             icon: Wrench,            color: "teal"    },
+  { id: "bundle",       label: "مجموعة",       desc: "عدة منتجات بسعر واحد",       icon: Layers,            color: "orange"  },
+  { id: "custom",       label: "تخصيص",        desc: "العميل يُحدد تفاصيله",        icon: SlidersHorizontal, color: "rose"    },
+] as const;
+
+type ProductTypeId = typeof PRODUCT_TYPES[number]["id"];
+
+const ICON_COLORS: Record<string, string> = {
+  indigo: "bg-indigo-50 text-indigo-600 border-indigo-200",
+  blue:   "bg-blue-50 text-blue-600 border-blue-200",
+  amber:  "bg-amber-50 text-amber-600 border-amber-200",
+  pink:   "bg-pink-50 text-pink-600 border-pink-200",
+  violet: "bg-violet-50 text-violet-600 border-violet-200",
+  teal:   "bg-teal-50 text-teal-600 border-teal-200",
+  orange: "bg-orange-50 text-orange-600 border-orange-200",
+  rose:   "bg-rose-50 text-rose-600 border-rose-200",
+};
 
 const schema = z.object({
   name: z.string().min(1, "اسم المنتج مطلوب"),
@@ -41,6 +66,11 @@ export default function EditProductPage() {
   const queryClient = useQueryClient();
   const [serverError, setServerError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [productType, setProductType] = useState<ProductTypeId>("physical");
+  const [showNewCat, setShowNewCat] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [newCatNameAr, setNewCatNameAr] = useState("");
+  const [catError, setCatError] = useState("");
 
   const { data: productData, isLoading: productLoading } = useQuery({
     queryKey: ["product", id],
@@ -64,6 +94,7 @@ export default function EditProductPage() {
     register,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isSubmitting, isDirty },
   } = useForm<FormData>({
     resolver: zodResolver(schema) as Resolver<FormData>,
@@ -73,6 +104,10 @@ export default function EditProductPage() {
   // Pre-fill form once product data is loaded
   useEffect(() => {
     if (productData) {
+      let derivedType: ProductTypeId = "physical";
+      if (productData.isDigital) derivedType = "digital";
+      else if (productData.isPreOrder) derivedType = "preorder";
+      setProductType(derivedType);
       reset({
         name: productData.name ?? "",
         nameAr: productData.nameAr ?? "",
@@ -90,6 +125,24 @@ export default function EditProductPage() {
     }
   }, [productData, reset]);
 
+  const createCategoryMutation = useMutation({
+    mutationFn: (data: { name: string; nameAr: string }) =>
+      api.post("/categories", { ...data, storeId: store!.id }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["categories", store?.id] });
+      const newId = res.data?.id ?? res.data?.category?.id ?? "";
+      setValue("categoryId", newId);
+      setShowNewCat(false);
+      setNewCatName("");
+      setNewCatNameAr("");
+      setCatError("");
+    },
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { message?: string } } };
+      setCatError(e?.response?.data?.message ?? "فشل إنشاء الفئة");
+    },
+  });
+
   const updateMutation = useMutation({
     mutationFn: (data: FormData) =>
       api.patch(`/products/${id}`, {
@@ -97,6 +150,9 @@ export default function EditProductPage() {
         comparePrice: data.comparePrice || undefined,
         cost: data.cost || undefined,
         categoryId: data.categoryId || undefined,
+        isDigital: productType === "digital",
+        isPreOrder: productType === "preorder",
+        trackStock: productType !== "digital" && productType !== "service",
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
@@ -261,10 +317,122 @@ export default function EditProductPage() {
                   </div>
                 </CardBody>
               </Card>
+
+              {/* Variants */}
+              <Card>
+                <CardHeader title="متغيرات المنتج" />
+                <CardBody>
+                  <VariantEditor
+                    productId={id}
+                    basePrice={productData?.price ? Number(productData.price) : 0}
+                    baseStock={productData?.stock ?? 0}
+                    initialOptions={productData?.options ?? []}
+                    initialVariants={productData?.variants ?? []}
+                  />
+                </CardBody>
+              </Card>
             </div>
 
             {/* Sidebar */}
             <div className="space-y-6">
+              {/* Product Type */}
+              <Card>
+                <CardHeader title="نوع المنتج" />
+                <CardBody className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    {PRODUCT_TYPES.map((t) => {
+                      const Icon = t.icon;
+                      const isSelected = productType === t.id;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setProductType(t.id)}
+                          className={`flex items-start gap-2 rounded-xl border-2 p-2.5 text-right transition-all ${
+                            isSelected
+                              ? "border-indigo-500 bg-indigo-50 shadow-sm"
+                              : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                          }`}
+                        >
+                          <div className={`mt-0.5 shrink-0 h-7 w-7 rounded-lg border flex items-center justify-center ${isSelected ? ICON_COLORS[t.color] : "bg-slate-100 text-slate-400 border-slate-200"}`}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className={`text-xs font-semibold leading-tight ${isSelected ? "text-indigo-700" : "text-slate-700"}`}>{t.label}</p>
+                            <p className="text-[10px] text-slate-400 leading-tight mt-0.5 truncate">{t.desc}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {productType === "digital" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700">رابط الملف الرقمي</label>
+                      <input
+                        type="url"
+                        placeholder="https://example.com/file.pdf"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  {productType === "preorder" && (
+                    <div className="border-t border-slate-100 pt-3 space-y-3">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-slate-700">رسالة الطلب المسبق (عربي)</label>
+                        <input
+                          type="text"
+                          placeholder="سيُشحن خلال 14 يوم"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-slate-700">مدة التسليم (أيام)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="14"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {productType === "gift_card" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-pink-50 border border-pink-100 rounded-xl px-3 py-2">
+                        أدخل قيمة البطاقة في حقل السعر. العميل يحصل على كود يستخدمه بقيمة مساوية للسعر.
+                      </p>
+                    </div>
+                  )}
+
+                  {productType === "subscription" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
+                        الاشتراكات المتكررة. السعر سيُحصّل دورياً — الربط بالبوابة يتم من صفحة الطلبات.
+                      </p>
+                    </div>
+                  )}
+
+                  {productType === "bundle" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-orange-50 border border-orange-100 rounded-xl px-3 py-2">
+                        أضف المنتجات في وصف المجموعة. ربط المنتجات معاً سيكون متاحاً قريباً.
+                      </p>
+                    </div>
+                  )}
+
+                  {productType === "custom" && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
+                        العميل سيتمكن من إضافة ملاحظة تخصيص عند الطلب (اسم، لون، مقاس خاص).
+                      </p>
+                    </div>
+                  )}
+                </CardBody>
+              </Card>
+
               <Card>
                 <CardHeader title="الحالة والتصنيف" />
                 <CardBody className="space-y-4">
@@ -282,9 +450,17 @@ export default function EditProductPage() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                      الفئة
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <label className="text-sm font-medium text-slate-700">الفئة</label>
+                      <button
+                        type="button"
+                        onClick={() => { setShowNewCat(v => !v); setCatError(""); }}
+                        className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800"
+                      >
+                        <Plus className="h-3 w-3" />
+                        {showNewCat ? "إلغاء" : "فئة جديدة"}
+                      </button>
+                    </div>
                     <select
                       className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       {...register("categoryId")}
@@ -296,7 +472,48 @@ export default function EditProductPage() {
                         </option>
                       ))}
                     </select>
+                    {showNewCat && (
+                      <div className="mt-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+                        <input
+                          type="text"
+                          placeholder="Category name (English)"
+                          value={newCatName}
+                          onChange={(e) => setNewCatName(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <input
+                          type="text"
+                          placeholder="اسم الفئة (عربي)"
+                          value={newCatNameAr}
+                          onChange={(e) => setNewCatNameAr(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        {catError && <p className="text-xs text-red-600">{catError}</p>}
+                        <button
+                          type="button"
+                          disabled={!newCatName.trim() || createCategoryMutation.isPending}
+                          onClick={() => createCategoryMutation.mutate({ name: newCatName.trim(), nameAr: newCatNameAr.trim() })}
+                          className="w-full rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          {createCategoryMutation.isPending ? "جارٍ الإضافة..." : "إضافة الفئة"}
+                        </button>
+                      </div>
+                    )}
                   </div>
+
+                  {(productType === "physical" || productType === "preorder" || productType === "bundle") && (
+                    <div className="flex items-center gap-3 border-t border-slate-100 pt-3">
+                      <input
+                        type="checkbox"
+                        id="trackStock"
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                        {...register("trackStock")}
+                      />
+                      <label htmlFor="trackStock" className="text-sm font-medium text-slate-700">
+                        تتبع المخزون
+                      </label>
+                    </div>
+                  )}
                 </CardBody>
               </Card>
 

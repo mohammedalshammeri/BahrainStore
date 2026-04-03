@@ -43,8 +43,10 @@
 | Storefront — Pre-order support | ✅ جاهز |
 | Storefront — Countdown Timer Banner | ✅ جاهز |
 | Storefront — Upsell Modal (سلة التسوق) | ✅ جاهز |
-| تكامل BenefitPay / Credimax | ⏳ لم يبدأ بعد |
-| تطبيق الجوال | ⏳ لم يبدأ بعد |
+| تكامل BenefitPay / Credimax | ✅ جاهز — `benefitpay.routes.ts` |
+| **تطبيق الجوال (React Native Expo 52)** | ✅ مكتمل 90% — `c:\BahrainStore\mobile\` |
+| تطبيق الجوال — ProductDetailScreen + NewProductScreen | ❌ متبقي |
+| تطبيق الجوال — babel.config.js + اختبار | ❌ متبقي |
 
 ---
 

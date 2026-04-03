@@ -10,6 +10,8 @@ import { api } from "@/lib/api";
 import type { StorePublic, Product } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatBHD } from "@/lib/utils";
+import { DarkModeToggle } from "@/components/ui/dark-mode-toggle";
+import { CurrencySelector } from "@/components/ui/currency-selector";
 
 interface NavbarProps {
   store: StorePublic;
@@ -178,6 +180,14 @@ export function Navbar({ store }: NavbarProps) {
           <Link href={`/${store.subdomain}/account`} className="hidden md:flex p-2 rounded-full hover:bg-gray-100 transition" aria-label="حسابي">
             <User className="w-5 h-5" />
           </Link>
+
+          {/* Currency selector */}
+          <div className="hidden md:block">
+            <CurrencySelector storeSubdomain={store.subdomain} />
+          </div>
+
+          {/* Dark mode toggle */}
+          <DarkModeToggle className="hidden md:flex" />
 
           {/* Mobile menu */}
           <button

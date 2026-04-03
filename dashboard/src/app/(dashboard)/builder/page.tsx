@@ -22,6 +22,9 @@ import {
   Minus,
   AlignLeft,
   Music,
+  Monitor,
+  Tablet,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -507,6 +510,7 @@ export default function BuilderPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "tablet" | "mobile">("desktop");
 
   // Load existing blocks
   useEffect(() => {
@@ -583,6 +587,28 @@ export default function BuilderPage() {
           <p className="text-xs text-gray-500 mt-0.5">صمّم الصفحة الرئيسية لمتجرك</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Device preview toggle */}
+          <div className="flex items-center border rounded-lg overflow-hidden">
+            {([
+              { key: "desktop", icon: Monitor, label: "سطح المكتب" },
+              { key: "tablet", icon: Tablet, label: "تابلت" },
+              { key: "mobile", icon: Smartphone, label: "جوال" },
+            ] as const).map(({ key, icon: Icon, label }) => (
+              <button
+                key={key}
+                title={label}
+                onClick={() => setPreviewDevice(key)}
+                className={cn(
+                  "p-2 transition-colors",
+                  previewDevice === key
+                    ? "bg-indigo-600 text-white"
+                    : "text-gray-500 hover:bg-gray-100"
+                )}
+              >
+                <Icon className="w-4 h-4" />
+              </button>
+            ))}
+          </div>
           <a
             href={`http://${store.subdomain}.localhost:3000`}
             target="_blank"
@@ -630,7 +656,23 @@ export default function BuilderPage() {
         </aside>
 
         {/* ── Center: Blocks List ── */}
-        <main className="flex-1 overflow-y-auto px-6 py-6">
+        <main className="flex-1 overflow-y-auto px-6 py-6 bg-gray-100">
+          <div
+            className={cn(
+              "mx-auto bg-white rounded-xl shadow-md overflow-hidden transition-all duration-300",
+              previewDevice === "mobile" ? "max-w-[390px]" :
+              previewDevice === "tablet" ? "max-w-[768px]" :
+              "max-w-full"
+            )}
+          >
+            {/* Device frame indicator */}
+            {previewDevice !== "desktop" && (
+              <div className="bg-gray-800 text-gray-300 text-xs text-center py-1.5 flex items-center justify-center gap-1.5">
+                {previewDevice === "mobile" ? <Smartphone className="w-3 h-3" /> : <Tablet className="w-3 h-3" />}
+                {previewDevice === "mobile" ? "معاينة الجوال (390px)" : "معاينة التابلت (768px)"}
+              </div>
+            )}
+            <div className="p-4">
           {loading ? (
             <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
               جاري التحميل...
@@ -665,6 +707,8 @@ export default function BuilderPage() {
               </button>
             </div>
           )}
+            </div>
+          </div>
         </main>
 
         {/* ── Right: Properties Panel ── */}

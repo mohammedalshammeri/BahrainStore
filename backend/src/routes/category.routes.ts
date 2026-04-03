@@ -28,12 +28,18 @@ export async function categoryRoutes(app: FastifyInstance) {
     const store = await prisma.store.findFirst({ where: { id: data.storeId, merchantId } })
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
-    const category = await prisma.category.create({
-      data,
-      include: { parent: { select: { id: true, name: true, nameAr: true } } },
-    })
-
-    return reply.status(201).send({ message: 'تم إنشاء التصنيف بنجاح', category })
+    try {
+      const category = await prisma.category.create({
+        data,
+        include: { parent: { select: { id: true, name: true, nameAr: true } } },
+      })
+      return reply.status(201).send({ message: 'تم إنشاء التصنيف بنجاح', category })
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        return reply.status(409).send({ error: 'هذا الرابط مستخدم بالفعل في هذا المتجر' })
+      }
+      throw err
+    }
   })
 
   // ── List Categories ───────────────────────────

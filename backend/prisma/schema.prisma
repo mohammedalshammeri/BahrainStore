@@ -28,12 +28,19 @@ model Merchant {
   googleId         String?   @unique
   passwordResetToken    String?   @unique
   passwordResetExpires  DateTime?
+  lastLoginIp      String?
+  lastLoginAt      DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  kycStatus     String    @default("NONE") // NONE | PENDING | APPROVED | REJECTED
 
   stores        Store[]
   sessions      Session[]
   staffMemberships StoreStaff[]
+  platformReferrals MerchantReferral[]
+  kycDocuments  KycDocument[]
+  termsAcceptances TermsAcceptance[]
 
   @@map("merchants")
 }
@@ -63,6 +70,7 @@ model Store {
   descriptionAr String?
   logo         String?
   favicon      String?
+  ogImage      String?
   domain       String?     @unique
   subdomain    String      @unique
   currency     String      @default("BHD")
@@ -75,7 +83,10 @@ model Store {
   plan         StorePlan   @default(STARTER)
   planExpiresAt DateTime?
   trialEndsAt  DateTime?
-  apiKey       String?     @unique
+  gracePeriodEnds DateTime?   // grace period after failed subscription payment
+  paymentRetryCount Int      @default(0)
+  apiKey          String?     @unique
+  apiKeyEnabled   Boolean     @default(true)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
@@ -107,6 +118,26 @@ model Store {
   emailSubscribers EmailSubscriber[]
   upsellRules      UpsellRule[]
   countdownTimers  CountdownTimer[]
+  domainVerification DomainVerification?
+  smsCampaigns     SmsCampaign[]
+  pushSubscriptions PushSubscription[]
+  pushCampaigns    PushNotificationCampaign[]
+  posOrders        PosOrder[]
+  posSessions      PosSession[]
+  importJobs       ImportJob[]
+  warehouses       Warehouse[]
+  liveStreams      LiveStream[]
+  liveChatSessions LiveChatSession[]
+  socialIntegrations SocialIntegration[]
+  b2bInvoices      B2BInvoice[]
+  zatcaInvoices    ZatcaInvoice[]
+  shippingZones    ShippingZone[]
+  shoppingFeed     ShoppingFeed?
+  productViews     ProductView[]
+  themePurchases   ThemePurchase[]
+  subscriptions    CustomerSubscription[]
+  merchantPayments MerchantPayment[]
+  apiUsageLogs     ApiUsageLog[]
 
   @@map("stores")
 }
@@ -182,6 +213,37 @@ model StoreSettings {
   tiktokPixelId       String?
   snapchatPixelId     String?
   googleAdsId         String?
+  // New Payment Gateways
+  stripeEnabled       Boolean @default(false)
+  stripeSecretKey     String?
+  stripePublicKey     String?
+  stripeWebhookSecret String?
+  paytabsEnabled      Boolean @default(false)
+  paytabsProfileId    String?
+  paytabsSecretKey    String?
+  paytabsRegion       String  @default("SAU")
+  paypalEnabled       Boolean @default(false)
+  paypalClientId      String?
+  paypalSecret        String?
+  paypalMode          String  @default("sandbox")
+  stcpayEnabled       Boolean @default(false)
+  stcpayMerchantId    String?
+  stcpayApiKey        String?
+  madaEnabled         Boolean @default(false)
+  hyperpayEnabled     Boolean @default(false)
+  hyperpayAccessToken String?
+  hyperpayEntityId    String?
+  postpayEnabled      Boolean @default(false)
+  postpayApiUrl       String?
+  postpayApiKey       String?
+  // Multi-currency
+  supportedCurrencies String[] @default(["BHD"])
+  // Dark Mode
+  darkModeEnabled     Boolean @default(false)
+  // ZATCA
+  zatcaEnabled        Boolean @default(false)
+  zatcaVatNumber      String?
+  zatcaCrNumber       String?
   // Homepage Page Builder
   homeBlocks          Json?
   createdAt      DateTime @default(now())
@@ -301,6 +363,10 @@ model Product {
   reviews         Review[]
   flashSaleItems  FlashSaleItem[]
   backInStockSubs BackInStockSubscription[]
+  subscriptionPlans SubscriptionPlan[]
+  liveStreamProducts LiveStreamProduct[]
+  productViews    ProductView[]
+  warehouseStocks WarehouseStock[]
 
   @@unique([storeId, slug])
   @@map("products")
@@ -403,6 +469,7 @@ model Customer {
   loyaltyTx    LoyaltyTransaction[]
   reviews      Review[]
   referralCodes ReferralCode[]
+  subscriptions CustomerSubscription[]
 
   @@unique([storeId, phone])
   @@map("customers")
@@ -452,6 +519,7 @@ model Order {
   notes           String?
   trackingNumber  String?
   shippingCompany String?
+  paymentReference String? // external payment gateway reference/session ID
   paidAt          DateTime?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
@@ -566,6 +634,7 @@ model Coupon {
   createdAt     DateTime    @default(now())
 
   store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  rules         CouponRule[]
 
   @@unique([storeId, code])
   @@map("coupons")
@@ -657,6 +726,8 @@ model BillingInvoice {
   paymentRef    String?
   invoiceNumber String               @unique
   notes         String?
+  discountBD    Decimal?             @db.Decimal(10, 3)
+  discountNote  String?
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
@@ -664,6 +735,38 @@ model BillingInvoice {
 
   @@index([storeId])
   @@map("billing_invoices")
+}
+
+// ─────────────────────────────────────────────
+// ADMIN NOTES (ملاحظات الإدارة الداخلية)
+// ─────────────────────────────────────────────
+model AdminNote {
+  id          String   @id @default(cuid())
+  merchantId  String
+  content     String
+  authorEmail String
+  authorName  String
+  createdAt   DateTime @default(now())
+
+  @@index([merchantId])
+  @@map("admin_notes")
+}
+
+// ─────────────────────────────────────────────
+// PLAN CONFIG (إعدادات الباقات)
+// ─────────────────────────────────────────────
+model PlanConfig {
+  id          String    @id @default(cuid())
+  plan        StorePlan @unique
+  priceBD     Decimal   @db.Decimal(10, 3)
+  maxProducts Int       @default(100)
+  maxOrders   Int       @default(500)
+  maxStaff    Int       @default(1)
+  maxApps     Int       @default(0)
+  features    String[]
+  updatedAt   DateTime  @updatedAt
+
+  @@map("plan_configs")
 }
 
 // ─────────────────────────────────────────────
@@ -942,6 +1045,8 @@ model SupportTicket {
   status      TicketStatus   @default(OPEN)
   priority    TicketPriority @default(MEDIUM)
   category    String?
+  assignedTo      String?
+  assignedToName  String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   resolvedAt  DateTime?
@@ -1089,12 +1194,21 @@ enum PaymentMethod {
   TAMARA
   TAP_PAYMENTS
   MOYASAR
+  STRIPE
+  PAYTABS
+  PAYPAL
+  STC_PAY
+  MADA
+  HYPERPAY
+  POSTPAY
 }
 
 enum CouponType {
   PERCENTAGE
   FIXED
   FREE_SHIPPING
+  BOGO
+  TIERED
 }
 
 enum StaffRole {
@@ -1215,18 +1329,20 @@ enum EmailCampaignStatus {
 // ANNOUNCEMENTS (الإعلانات - للمنصة)
 // ─────────────────────────────────────────────
 model Announcement {
-  id        String           @id @default(cuid())
-  title     String
-  titleAr   String
-  body      String?
-  bodyAr    String?
-  type      AnnouncementType @default(INFO)
-  isActive  Boolean          @default(true)
-  isPinned  Boolean          @default(false)
-  startsAt  DateTime?
-  endsAt    DateTime?
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id         String           @id @default(cuid())
+  title      String
+  titleAr    String
+  body       String?
+  bodyAr     String?
+  type       AnnouncementType @default(INFO)
+  isActive   Boolean          @default(true)
+  isPinned   Boolean          @default(false)
+  targetPlan String?          // null = all plans, otherwise plan name e.g. STARTER
+  viewCount  Int              @default(0)
+  startsAt   DateTime?
+  endsAt     DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
 
   @@map("announcements")
 }
@@ -1302,4 +1418,1521 @@ model CountdownTimer {
   store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("countdown_timers")
+}
+
+// ─────────────────────────────────────────────
+// DOMAIN MANAGEMENT (إدارة الدومينات)
+// ─────────────────────────────────────────────
+model DomainVerification {
+  id            String       @id @default(cuid())
+  storeId       String       @unique
+  domain        String
+  verifyToken   String       @unique
+  verifyType    String       @default("TXT") // TXT | CNAME
+  sslStatus     SslStatus    @default(PENDING)
+  sslIssuedAt   DateTime?
+  sslExpiresAt  DateTime?
+  isVerified    Boolean      @default(false)
+  verifiedAt    DateTime?
+  cdnEnabled    Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  store         Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("domain_verifications")
+}
+
+enum SslStatus {
+  PENDING
+  ISSUING
+  ACTIVE
+  EXPIRED
+  FAILED
+}
+
+// ─────────────────────────────────────────────
+// SUBSCRIPTION PRODUCTS (منتجات الاشتراك)
+// ─────────────────────────────────────────────
+model SubscriptionPlan {
+  id            String              @id @default(cuid())
+  productId     String
+  name          String
+  nameAr        String
+  intervalType  SubscriptionInterval @default(MONTHLY)
+  intervalCount Int                 @default(1)
+  price         Decimal             @db.Decimal(10, 3)
+  trialDays     Int                 @default(0)
+  isActive      Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+
+  product       Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  subscriptions CustomerSubscription[]
+
+  @@map("subscription_plans")
+}
+
+model CustomerSubscription {
+  id            String               @id @default(cuid())
+  storeId       String
+  customerId    String
+  planId        String
+  status        SubscriptionStatus   @default(ACTIVE)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean         @default(false)
+  cancelledAt   DateTime?
+  trialStartsAt DateTime?
+  trialEndsAt   DateTime?
+  gatewaySubId  String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  store         Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer      Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  plan          SubscriptionPlan     @relation(fields: [planId], references: [id])
+
+  @@index([storeId, customerId])
+  @@map("customer_subscriptions")
+}
+
+enum SubscriptionInterval {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+// ─────────────────────────────────────────────
+// SMS MARKETING (التسويق بالرسائل النصية)
+// ─────────────────────────────────────────────
+model SmsCampaign {
+  id             String            @id @default(cuid())
+  storeId        String
+  name           String
+  message        String
+  status         SmsCampaignStatus @default(DRAFT)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  recipientCount Int               @default(0)
+  deliveredCount Int               @default(0)
+  failedCount    Int               @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  store          Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("sms_campaigns")
+}
+
+enum SmsCampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// PUSH NOTIFICATIONS (الإشعارات الفورية)
+// ─────────────────────────────────────────────
+model PushSubscription {
+  id          String   @id @default(cuid())
+  storeId     String
+  endpoint    String
+  p256dh      String
+  auth        String
+  customerId  String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, endpoint])
+  @@map("push_subscriptions")
+}
+
+model PushNotificationCampaign {
+  id             String   @id @default(cuid())
+  storeId        String
+  title          String
+  body           String
+  imageUrl       String?
+  targetUrl      String?
+  sentCount      Int      @default(0)
+  clickCount     Int      @default(0)
+  isActive       Boolean  @default(true)
+  sentAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("push_notification_campaigns")
+}
+
+// ─────────────────────────────────────────────
+// ADVANCED COUPONS (كوبونات متقدمة)
+// ─────────────────────────────────────────────
+model CouponRule {
+  id              String     @id @default(cuid())
+  couponId        String
+  ruleType        String     // BOGO | TIERED | PRODUCT_SPECIFIC | CATEGORY_SPECIFIC
+  buyQuantity     Int?       // BOGO: buy X
+  getQuantity     Int?       // BOGO: get Y free
+  getProductId    String?    // BOGO: which product is free
+  tierMinValue    Decimal?   @db.Decimal(10, 3) // Tiered: min order for this tier
+  tierDiscount    Decimal?   @db.Decimal(10, 3) // Tiered: discount amount
+  tierType        String?    // Tiered: PERCENTAGE | FIXED
+  productIds      String[]   // Specific products
+  categoryIds     String[]   // Specific categories
+  createdAt       DateTime   @default(now())
+
+  coupon          Coupon     @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  @@map("coupon_rules")
+}
+
+// ─────────────────────────────────────────────
+// POS — نقطة البيع
+// ─────────────────────────────────────────────
+model PosSession {
+  id          String      @id @default(cuid())
+  storeId     String
+  staffId     String
+  status      PosStatus   @default(OPEN)
+  openingCash Decimal     @default(0) @db.Decimal(10, 3)
+  closingCash Decimal?    @db.Decimal(10, 3)
+  totalSales  Decimal     @default(0) @db.Decimal(10, 3)
+  openedAt    DateTime    @default(now())
+  closedAt    DateTime?
+
+  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orders      PosOrder[]
+
+  @@map("pos_sessions")
+}
+
+model PosOrder {
+  id          String       @id @default(cuid())
+  sessionId   String
+  storeId     String
+  orderNumber String
+  items       Json         // [{productId, variantId, name, price, qty}]
+  subtotal    Decimal      @db.Decimal(10, 3)
+  vatAmount   Decimal      @default(0) @db.Decimal(10, 3)
+  discount    Decimal      @default(0) @db.Decimal(10, 3)
+  total       Decimal      @db.Decimal(10, 3)
+  payMethod   String       @default("CASH") // CASH | CARD | BENEFIT_PAY
+  paidAmount  Decimal      @default(0) @db.Decimal(10, 3)
+  change      Decimal      @default(0) @db.Decimal(10, 3)
+  customerId  String?
+  customerName String?
+  createdAt   DateTime     @default(now())
+
+  session     PosSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("pos_orders")
+}
+
+enum PosStatus {
+  OPEN
+  CLOSED
+}
+
+// ─────────────────────────────────────────────
+// IMPORT JOBS (استيراد من منصات أخرى)
+// ─────────────────────────────────────────────
+model ImportJob {
+  id          String      @id @default(cuid())
+  storeId     String
+  source      ImportSource
+  status      ImportStatus @default(PENDING)
+  totalItems  Int         @default(0)
+  imported    Int         @default(0)
+  failed      Int         @default(0)
+  errorLog    String[]
+  fileUrl     String?
+  apiConfig   Json?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime    @default(now())
+
+  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("import_jobs")
+}
+
+enum ImportSource {
+  SALLA
+  ZID
+  SHOPIFY
+  WOOCOMMERCE
+  CSV
+}
+
+enum ImportStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+// ─────────────────────────────────────────────
+// PLATFORM HEALTH (صحة المنصة)
+// ─────────────────────────────────────────────
+model ErrorLog {
+  id          String   @id @default(cuid())
+  storeId     String?
+  level       String   @default("ERROR") // ERROR | WARN | INFO
+  message     String
+  stack       String?
+  path        String?
+  method      String?
+  userId      String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([storeId])
+  @@map("error_logs")
+}
+
+model SystemMetric {
+  id          String   @id @default(cuid())
+  metricName  String   // response_time | memory_usage | cpu | active_stores
+  value       Float
+  unit        String?
+  recordedAt  DateTime @default(now())
+
+  @@index([metricName, recordedAt])
+  @@map("system_metrics")
+}
+
+model SystemAlertConfig {
+  id          String   @id @default(cuid())
+  name        String
+  metricName  String
+  threshold   Float
+  comparison  String   @default("GT") // GT | LT | EQ
+  channel     String   @default("EMAIL") // EMAIL | SLACK
+  destination String   // email address or slack webhook URL
+  isActive    Boolean  @default(true)
+  lastAlertAt DateTime?
+  createdAt   DateTime @default(now())
+
+  @@map("system_alert_configs")
+}
+
+// ─────────────────────────────────────────────
+// THEME STORE (متجر القوالب)
+// ─────────────────────────────────────────────
+model Theme {
+  id             String      @id @default(cuid())
+  slug           String      @unique
+  name           String
+  nameAr         String
+  description    String?
+  descriptionAr  String?
+  previewUrl     String?
+  thumbnailUrl   String?
+  demoUrl        String?
+  authorName     String
+  authorEmail    String?
+  price          Decimal     @default(0) @db.Decimal(10, 3)
+  isPremium      Boolean     @default(false)
+  isApproved     Boolean     @default(false)
+  isActive       Boolean     @default(true)
+  isFeatured     Boolean     @default(false)
+  downloadUrl    String?
+  tags           String[]
+  installCount   Int         @default(0)
+  rating         Decimal     @default(0) @db.Decimal(3, 2)
+  ratingCount    Int         @default(0)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  purchases      ThemePurchase[]
+
+  @@map("themes")
+}
+
+model ThemePurchase {
+  id        String   @id @default(cuid())
+  themeId   String
+  storeId   String
+  amount    Decimal  @db.Decimal(10, 3)
+  licenseKey String  @unique @default(cuid())
+  createdAt DateTime @default(now())
+
+  theme     Theme    @relation(fields: [themeId], references: [id], onDelete: Cascade)
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([themeId, storeId])
+  @@map("theme_purchases")
+}
+
+// ─────────────────────────────────────────────
+// PARTNER PROGRAM (برنامج الشركاء)
+// ─────────────────────────────────────────────
+model Partner {
+  id               String        @id @default(cuid())
+  companyName      String
+  contactName      String
+  email            String        @unique
+  phone            String?
+  website          String?
+  type             PartnerType   @default(AGENCY)
+  status           PartnerStatus @default(PENDING)
+  referralCode     String        @unique
+  commissionRate   Decimal       @default(0.20) @db.Decimal(5, 4) // 20%
+  totalEarned      Decimal       @default(0) @db.Decimal(10, 3)
+  totalPaid        Decimal       @default(0) @db.Decimal(10, 3)
+  certifiedBadge   Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  referrals        PartnerReferral[]
+
+  @@map("partners")
+}
+
+model PartnerReferral {
+  id         String   @id @default(cuid())
+  partnerId  String
+  storeId    String
+  commission Decimal  @default(0) @db.Decimal(10, 3)
+  status     String   @default("PENDING") // PENDING | PAID
+  paidAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  partner    Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@map("partner_referrals")
+}
+
+enum PartnerType {
+  AGENCY
+  FREELANCER
+  RESELLER
+  TECHNOLOGY
+}
+
+enum PartnerStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+}
+
+// ─────────────────────────────────────────────
+// LIVE COMMERCE (البث المباشر)
+// ─────────────────────────────────────────────
+model LiveStream {
+  id           String          @id @default(cuid())
+  storeId      String
+  title        String
+  titleAr      String?
+  description  String?
+  status       LiveStreamStatus @default(SCHEDULED)
+  scheduledAt  DateTime?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  streamKey    String          @unique @default(cuid())
+  platform     String          @default("CUSTOM") // YOUTUBE | TIKTOK | INSTAGRAM | CUSTOM
+  embedUrl     String?         // iframe embed URL for the storefront player
+  playbackUrl  String?
+  thumbnailUrl String?
+  viewerCount  Int             @default(0)
+  peakViewers  Int             @default(0)
+  totalOrders  Int             @default(0)
+  revenue      Decimal         @default(0) @db.Decimal(10, 3)
+  recordingUrl String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  store        Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  products     LiveStreamProduct[]
+  chatMessages LiveChatMessage[]
+
+  @@map("live_streams")
+}
+
+model LiveStreamProduct {
+  id           String    @id @default(cuid())
+  streamId     String
+  productId    String
+  sortOrder    Int       @default(0)
+  addedAt      DateTime  @default(now())
+  soldCount    Int       @default(0)
+
+  stream       LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([streamId, productId])
+  @@map("live_stream_products")
+}
+
+model LiveChatMessage {
+  id         String   @id @default(cuid())
+  streamId   String
+  senderName String
+  senderId   String?
+  message    String
+  isPinned   Boolean  @default(false)
+  isHidden   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  stream     LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+
+  @@index([streamId, createdAt])
+  @@map("live_chat_messages")
+}
+
+enum LiveStreamStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// LIVE CHAT SUPPORT (دردشة مباشرة للدعم)
+// ─────────────────────────────────────────────
+model LiveChatSession {
+  id          String            @id @default(cuid())
+  storeId     String
+  visitorId   String
+  visitorName String?
+  visitorEmail String?
+  status      ChatSessionStatus @default(WAITING)
+  assignedTo  String?           // staffId
+  startedAt   DateTime          @default(now())
+  endedAt     DateTime?
+  rating      Int?
+
+  store       Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  messages    LiveChatSupportMessage[]
+
+  @@map("live_chat_sessions")
+}
+
+model LiveChatSupportMessage {
+  id         String          @id @default(cuid())
+  sessionId  String
+  senderType String          @default("VISITOR") // VISITOR | STAFF
+  senderId   String?
+  message    String
+  fileUrl    String?
+  isRead     Boolean         @default(false)
+  createdAt  DateTime        @default(now())
+
+  session    LiveChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("live_chat_support_messages")
+}
+
+enum ChatSessionStatus {
+  WAITING
+  ACTIVE
+  CLOSED
+}
+
+// ─────────────────────────────────────────────
+// MULTI-LOCATION INVENTORY (مخزون متعدد المواقع)
+// ─────────────────────────────────────────────
+model Warehouse {
+  id          String    @id @default(cuid())
+  storeId     String
+  name        String
+  nameAr      String
+  address     String?
+  city        String?
+  country     String    @default("BH")
+  isDefault   Boolean   @default(false)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stocks      WarehouseStock[]
+
+  @@map("warehouses")
+}
+
+model WarehouseStock {
+  id          String    @id @default(cuid())
+  warehouseId String
+  productId   String
+  variantId   String?
+  stock       Int       @default(0)
+  reserved    Int       @default(0)    // reserved for pending orders
+  updatedAt   DateTime  @updatedAt
+
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, productId, variantId])
+  @@map("warehouse_stocks")
+}
+
+// ─────────────────────────────────────────────
+// CURRENCY RATES (أسعار العملات)
+// ─────────────────────────────────────────────
+model CurrencyRate {
+  id          String   @id @default(cuid())
+  baseCurrency String  @default("BHD")
+  targetCurrency String
+  rate        Decimal  @db.Decimal(12, 6)
+  source      String?  // openexchangerates / manual
+  updatedAt   DateTime @updatedAt
+
+  @@unique([baseCurrency, targetCurrency])
+  @@map("currency_rates")
+}
+
+// ─────────────────────────────────────────────
+// PRODUCT VIEWS / AI (تتبع المشاهدات)
+// ─────────────────────────────────────────────
+model ProductView {
+  id          String   @id @default(cuid())
+  storeId     String
+  productId   String
+  customerId  String?
+  sessionId   String?
+  source      String?
+  createdAt   DateTime @default(now())
+
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, productId])
+  @@index([storeId, customerId])
+  @@map("product_views")
+}
+
+// ─────────────────────────────────────────────
+// ZATCA / B2B INVOICES (الفوترة الإلكترونية)
+// ─────────────────────────────────────────────
+model ZatcaInvoice {
+  id            String   @id @default(cuid())
+  storeId       String
+  orderId       String   @unique
+  invoiceNumber String
+  uuid          String   @unique @default(cuid())
+  invoiceType   String   @default("STANDARD") // STANDARD | CREDIT | DEBIT
+  sellerName    String
+  sellerVat     String?
+  buyerName     String?
+  buyerVat      String?
+  totalAmount   Decimal  @db.Decimal(10, 2)
+  vatAmount     Decimal  @db.Decimal(10, 2)
+  qrCode        String?
+  xmlContent    String?
+  status        String   @default("PENDING") // PENDING | REPORTED | ERROR
+  reportedAt    DateTime?
+  createdAt     DateTime @default(now())
+
+  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("zatca_invoices")
+}
+
+model B2BInvoice {
+  id            String        @id @default(cuid())
+  storeId       String
+  orderId       String?
+  invoiceNumber String
+  buyerCompany  String
+  buyerCR       String?
+  buyerVat      String?
+  buyerEmail    String?
+  items         Json
+  subtotal      Decimal       @db.Decimal(10, 3)
+  vatAmount     Decimal       @default(0) @db.Decimal(10, 3)
+  total         Decimal       @db.Decimal(10, 3)
+  status        B2BStatus     @default(DRAFT)
+  dueDate       DateTime?
+  paidAt        DateTime?
+  notes         String?
+  pdfUrl        String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, invoiceNumber])
+  @@map("b2b_invoices")
+}
+
+enum B2BStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// SOCIAL INTEGRATIONS (TikTok Shop, Instagram)
+// ─────────────────────────────────────────────
+model SocialIntegration {
+  id           String   @id @default(cuid())
+  storeId      String
+  platform     String   // TIKTOK_SHOP | INSTAGRAM | GOOGLE_SHOPPING
+  isConnected  Boolean  @default(false)
+  accessToken  String?
+  refreshToken String?
+  expiresAt    DateTime?
+  shopId       String?
+  catalogId    String?
+  lastSyncAt   DateTime?
+  syncedCount  Int      @default(0)
+  config       Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, platform])
+  @@map("social_integrations")
+}
+
+// ─────────────────────────────────────────────
+// SHIPPING RATES & PROVIDERS
+// ─────────────────────────────────────────────
+model ShippingZone {
+  id          String    @id @default(cuid())
+  storeId     String
+  name        String
+  nameAr      String
+  countries   String[]
+  cities      String[]
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  rates       ShippingRate[]
+
+  @@map("shipping_zones")
+}
+
+model ShippingRate {
+  id               String     @id @default(cuid())
+  zoneId           String
+  name             String
+  nameAr           String
+  provider         String     @default("MANUAL") // MANUAL | ARAMEX | DHL | SMSA | FETCHR
+  price            Decimal    @db.Decimal(10, 3)
+  minWeight        Decimal?   @db.Decimal(8, 3)
+  maxWeight        Decimal?   @db.Decimal(8, 3)
+  minOrderValue    Decimal?   @db.Decimal(10, 3)
+  isFree           Boolean    @default(false)
+  estimatedDays    Int        @default(3)
+  isActive         Boolean    @default(true)
+  createdAt        DateTime   @default(now())
+
+  zone             ShippingZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@map("shipping_rates")
+}
+
+model ShipmentTracking {
+  id              String   @id @default(cuid())
+  orderId         String   @unique
+  trackingNumber  String
+  provider        String
+  status          String   @default("CREATED")
+  events          Json     @default("[]")
+  estimatedDelivery DateTime?
+  deliveredAt     DateTime?
+  lastCheckedAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("shipment_trackings")
+}
+
+// ─────────────────────────────────────────────
+// GOOGLE SHOPPING FEED
+// ─────────────────────────────────────────────
+model ShoppingFeed {
+  id           String   @id @default(cuid())
+  storeId      String   @unique
+  platform     String   @default("GOOGLE") // GOOGLE | META
+  isEnabled    Boolean  @default(false)
+  lastGenAt    DateTime?
+  feedUrl      String?
+  productCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("shopping_feeds")
+}
+
+// ─────────────────────────────────────────────
+// POSTPAY (تقسيط)
+// ─────────────────────────────────────────────
+// (Uses PaymentMethod enum extension below)
+
+// ─────────────────────────────────────────────
+// STOREFRONT THEME SETTINGS (Dark Mode / Colors)
+// ─────────────────────────────────────────────
+// Already handled in StoreSettings (theme field)
+
+// ─────────────────────────────────────────────
+// AI COPILOT (المساعد الذكي للتاجر)
+// ─────────────────────────────────────────────
+model AiChat {
+  id        String   @id @default(cuid())
+  storeId   String
+  role      String   // 'merchant' | 'assistant'
+  message   String   @db.Text
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([storeId, createdAt])
+  @@map("ai_chats")
+}
+
+// ─────────────────────────────────────────────
+// BAZAR FINANCE (تمويل التاجر)
+// ─────────────────────────────────────────────
+model MerchantLoan {
+  id              String         @id @default(cuid())
+  storeId         String
+  merchantId      String
+  requestedAmount Float
+  approvedAmount  Float?
+  repaidAmount    Float          @default(0)
+  feeRate         Float          @default(0.10) // 10%
+  feeAmount       Float?
+  repaymentRate   Float          @default(0.10) // 10% of each sale
+  status          LoanStatus     @default(PENDING)
+  approvedAt      DateTime?
+  disbursedAt     DateTime?
+  fullyRepaidAt   DateTime?
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  repayments      LoanRepayment[]
+
+  @@index([storeId])
+  @@index([merchantId])
+  @@map("merchant_loans")
+}
+
+model LoanRepayment {
+  id        String   @id @default(cuid())
+  loanId    String
+  orderId   String?
+  amount    Float
+  createdAt DateTime @default(now())
+
+  loan      MerchantLoan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+
+  @@index([loanId])
+  @@map("loan_repayments")
+}
+
+enum LoanStatus {
+  PENDING
+  APPROVED
+  DISBURSED
+  REPAYING
+  FULLY_REPAID
+  REJECTED
+}
+
+// ─────────────────────────────────────────────
+// RESTAURANT MODE (وضع المطاعم)
+// ─────────────────────────────────────────────
+model RestaurantTable {
+  id        String   @id @default(cuid())
+  storeId   String
+  name      String   // "طاولة 1", "طاولة VIP"
+  qrCode    String?  // QR code URL or data
+  capacity  Int      @default(4)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  orders    RestaurantOrder[]
+
+  @@index([storeId])
+  @@map("restaurant_tables")
+}
+
+model RestaurantOrder {
+  id          String              @id @default(cuid())
+  storeId     String
+  tableId     String
+  orderId     String?             // links to main Order
+  guestCount  Int                 @default(1)
+  notes       String?
+  status      RestaurantOrderStatus @default(PENDING)
+  paidAt      DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  table       RestaurantTable     @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status])
+  @@map("restaurant_orders")
+}
+
+enum RestaurantOrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  SERVED
+  PAID
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// MERCHANT BADGES (شارات التاجر)
+// ─────────────────────────────────────────────
+model MerchantBadge {
+  id          String   @id @default(cuid())
+  key         String   @unique  // 'trusted_seller', 'fast_shipper', etc.
+  nameAr      String
+  nameEn      String
+  descriptionAr String
+  icon        String
+  color       String   @default("#6366f1")
+  criteria    Json     // { type: 'orders_count', threshold: 100 }
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  earned      MerchantBadgeEarned[]
+
+  @@map("merchant_badges")
+}
+
+model MerchantBadgeEarned {
+  id        String   @id @default(cuid())
+  storeId   String
+  badgeId   String
+  earnedAt  DateTime @default(now())
+
+  badge     MerchantBadge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, badgeId])
+  @@index([storeId])
+  @@map("merchant_badges_earned")
+}
+
+// ─────────────────────────────────────────────
+// SMART ALERTS (التنبيهات الذكية)
+// ─────────────────────────────────────────────
+model MerchantAlert {
+  id          String      @id @default(cuid())
+  storeId     String
+  type        AlertType
+  title       String
+  message     String      @db.Text
+  data        Json?
+  isRead      Boolean     @default(false)
+  priority    AlertPriority @default(MEDIUM)
+  createdAt   DateTime    @default(now())
+
+  @@index([storeId, isRead])
+  @@index([storeId, createdAt])
+  @@map("merchant_alerts")
+}
+
+model AlertConfig {
+  id             String   @id @default(cuid())
+  storeId        String   @unique
+  lowStockDays   Int      @default(7)    // alert when stock runs out in X days
+  abandonedCartMinutes Int @default(30)  // alert after Y minutes
+  inactiveCustomerDays  Int @default(60) // alert after Z days inactive
+  channels       Json     @default("{\"email\": true, \"push\": true, \"whatsapp\": false}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("alert_configs")
+}
+
+enum AlertType {
+  LOW_STOCK
+  OUT_OF_STOCK
+  ABANDONED_CART
+  NEW_REVIEW
+  LARGE_ORDER
+  FAILED_PAYMENT
+  INACTIVE_CUSTOMER
+  GOAL_REACHED
+  COMPETITOR_PRICE
+  SEASONAL_REMINDER
+  LOAN_REPAYMENT
+}
+
+enum AlertPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+// ─────────────────────────────────────────────
+// WHATSAPP COMMERCE (تجارة واتساب)
+// ─────────────────────────────────────────────
+model WhatsappCommerceSession {
+  id          String   @id @default(cuid())
+  storeId     String
+  phone       String
+  customerName String?
+  state       String   @default("GREETING") // FSM state
+  cartItems   Json     @default("[]")
+  customerId  String?
+  lastMessageAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@unique([storeId, phone])
+  @@index([storeId])
+  @@map("whatsapp_commerce_sessions")
+}
+
+model WhatsappCommerceConfig {
+  id              String   @id @default(cuid())
+  storeId         String   @unique
+  phoneNumberId   String
+  accessToken     String
+  verifyToken     String
+  welcomeMessage  String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("whatsapp_commerce_configs")
+}
+
+// ─────────────────────────────────────────────
+// PLATFORM BLOG (مدونة المنصة)
+// ─────────────────────────────────────────────
+model PlatformBlogPost {
+  id          String    @id @default(cuid())
+  title       String
+  titleAr     String
+  slug        String    @unique
+  content     String
+  contentAr   String?
+  excerpt     String?
+  excerptAr   String?
+  coverImage  String?
+  category    String    @default("news") // news | update | guide
+  isPublished Boolean   @default(false)
+  publishedAt DateTime?
+  tags        String[]
+  authorName  String?
+  views       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("platform_blog_posts")
+}
+
+// ─────────────────────────────────────────────
+// EMAIL TEMPLATES (قوالب الإيميل)
+// ─────────────────────────────────────────────
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique // welcome | subscription_renewal | subscription_expiry_warning
+  name      String
+  nameAr    String
+  subject   String
+  subjectAr String
+  body      String   // HTML template with {{var}} placeholders
+  bodyAr    String
+  vars      String[] // available template variables e.g. ["{{merchant_name}}", "{{store_name}}"]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("email_templates")
+}
+
+// ─────────────────────────────────────────────
+// PLATFORM STAFF ROLES (أدوار فريق المنصة)
+// ─────────────────────────────────────────────
+model PlatformRole {
+  id          String           @id @default(cuid())
+  name        String           @unique  // e.g. SUPPORT, FINANCE, CONTENT, ADMIN
+  nameAr      String
+  description String?
+  // Permissions
+  canViewMerchants    Boolean @default(false)
+  canDisableStore     Boolean @default(false)
+  canReplyTickets     Boolean @default(false)
+  canEditPlans        Boolean @default(false)
+  canManageApps       Boolean @default(false)
+  canViewFinancials   Boolean @default(false)
+  canViewAuditLog     Boolean @default(false)
+  canManageContent    Boolean @default(false)
+  canManageTeam       Boolean @default(false)
+  isSystem            Boolean @default(false) // built-in & not deletable
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members     PlatformStaff[]
+
+  @@map("platform_roles")
+}
+
+// ─────────────────────────────────────────────
+// PLATFORM STAFF (موظفو المنصة)
+// ─────────────────────────────────────────────
+model PlatformStaff {
+  id          String        @id @default(cuid())
+  email       String        @unique
+  firstName   String
+  lastName    String
+  roleId      String
+  isActive    Boolean       @default(true)
+  inviteToken String?       @unique  // set until accepted
+  invitedAt   DateTime      @default(now())
+  joinedAt    DateTime?
+  lastLoginAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  role        PlatformRole  @relation(fields: [roleId], references: [id])
+
+  @@map("platform_staff")
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOG (سجل العمليات)
+// ─────────────────────────────────────────────
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String   // merchantId (admin) or platformStaffId
+  actorType  String   // ADMIN | STAFF
+  actorName  String
+  actorEmail String
+  action     String   // e.g. DISABLE_STORE, UPDATE_PLAN, DELETE_APP
+  entityType String?  // STORE | MERCHANT | APP | THEME | TICKET ...
+  entityId   String?
+  entityName String?
+  details    Json?    // extra context
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 7 — GROWTH (الطبقة ٧ — النمو)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// كوبونات الاشتراك
+model SubscriptionCoupon {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  description     String?
+  type            String    @default("PERCENTAGE") // PERCENTAGE | FIXED
+  value           Decimal   @db.Decimal(10, 3)     // % أو مبلغ ثابت
+  maxUses         Int?                              // null = غير محدود
+  usedCount       Int       @default(0)
+  applicablePlan  String?                           // null = كل الباقات
+  validFrom       DateTime?
+  validTo         DateTime?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  usages          SubscriptionCouponUsage[]
+  @@map("subscription_coupons")
+}
+
+model SubscriptionCouponUsage {
+  id        String   @id @default(cuid())
+  couponId  String
+  merchantId String
+  storeId   String?
+  discount  Decimal  @db.Decimal(10, 3)
+  usedAt    DateTime @default(now())
+  coupon    SubscriptionCoupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  @@map("subscription_coupon_usages")
+}
+
+// برنامج إحالة التجار (merchant invites merchant to platform)
+model MerchantReferral {
+  id                 String    @id @default(cuid())
+  referrerId         String
+  referrerName       String
+  referrerEmail      String
+  referredEmail      String
+  referredMerchantId String?
+  status             String    @default("PENDING") // PENDING | REGISTERED | REWARDED
+  rewardAmount       Decimal   @default(0) @db.Decimal(10, 3)
+  rewardedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  referrer           Merchant  @relation(fields: [referrerId], references: [id], onDelete: Cascade)
+  @@index([referrerId])
+  @@index([status])
+  @@map("merchant_referrals")
+}
+
+// ─────────────────────────────────────────────
+// LAYER 9 — GOVERNANCE & COMPLIANCE (الحوكمة والامتثال)
+// ─────────────────────────────────────────────
+
+// KYC Documents (وثائق التحقق)
+model KycDocument {
+  id          String   @id @default(cuid())
+  merchantId  String
+  type        String   // NATIONAL_ID | COMMERCIAL_REGISTRATION | VAT_CERTIFICATE | OTHER
+  fileUrl     String
+  fileName    String?
+  status      String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewNote  String?
+  reviewedAt  DateTime?
+  reviewedBy  String?  // admin email
+  createdAt   DateTime @default(now())
+
+  merchant    Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([status])
+  @@map("kyc_documents")
+}
+
+// Blacklist (القوائم السوداء)
+model Blacklist {
+  id        String   @id @default(cuid())
+  type      String   // IP | EMAIL | DOMAIN
+  value     String
+  reason    String?
+  createdBy String?  // admin email
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([type, value])
+  @@index([type])
+  @@map("blacklist")
+}
+
+// Legal Pages (الصفحات القانونية)
+model LegalPage {
+  id        String   @id @default(cuid())
+  type      String   @unique // PRIVACY_POLICY | TERMS_OF_SERVICE
+  title     String
+  content   String
+  updatedAt DateTime @updatedAt
+  updatedBy String?  // admin email
+
+  @@map("legal_pages")
+}
+
+// Terms Acceptance Log (سجل قبول الشروط)
+model TermsAcceptance {
+  id          String   @id @default(cuid())
+  merchantId  String
+  version     String   @default("1.0")
+  acceptedAt  DateTime @default(now())
+  ipAddress   String?
+  userAgent   String?
+
+  merchant    Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@map("terms_acceptances")
+}
+
+// Platform Settings (إعدادات المنصة)
+model PlatformSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+// ─────────────────────────────────────────────
+// LAYER 10 — INFRASTRUCTURE (البنية التحتية)
+// ─────────────────────────────────────────────
+
+// Feature Flags (ميزات قابلة للتشغيل/الإيقاف)
+model FeatureFlag {
+  id            String   @id @default(cuid())
+  key           String   @unique  // e.g. "live_chat", "ai_copilot"
+  name          String
+  description   String?
+  isEnabled     Boolean  @default(false)
+  enabledForPlans String[] @default([]) // [] = all plans; ["PRO","ENTERPRISE"] = specific
+  betaMerchantIds String[] @default([]) // specific merchantIds for beta
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("feature_flags")
+}
+
+// Maintenance Windows (نوافذ الصيانة)
+model MaintenanceWindow {
+  id              String   @id @default(cuid())
+  title           String
+  message         String
+  isActive        Boolean  @default(false)
+  scheduledStart  DateTime?
+  scheduledEnd    DateTime?
+  notifyMerchants Boolean  @default(true)
+  notifiedAt      DateTime?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("maintenance_windows")
+}
+
+// Rate Limit Overrides per plan
+model RateLimitConfig {
+  id          String   @id @default(cuid())
+  plan        String   @unique // STARTER | GROWTH | PRO | ENTERPRISE
+  reqPerMinute Int     @default(60)
+  reqPerDay   Int      @default(10000)
+  burstLimit  Int      @default(20)
+  updatedAt   DateTime @updatedAt
+
+  @@map("rate_limit_configs")
+}
+
+// ─── LAYER 11: BULK CAMPAIGNS ─────────────────────────────────────────────
+model BulkCampaign {
+  id           String    @id @default(cuid())
+  type         String    // EMAIL | SMS
+  subject      String?   // email only
+  body         String
+  targetPlan   String?   // null = all plans; "STARTER" | "GROWTH" | "PRO" | "ENTERPRISE"
+  targetRegion String?   // optional filter
+  status       String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | FAILED
+  scheduledAt  DateTime?
+  sentAt       DateTime?
+  totalSent    Int       @default(0)
+  opens        Int       @default(0)
+  clicks       Int       @default(0)
+  createdBy    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("bulk_campaigns")
+}
+
+// ─── LAYER 11: PLATFORM INCIDENTS (Status Page) ───────────────────────────
+model PlatformIncident {
+  id         String    @id @default(cuid())
+  title      String
+  type       String    @default("NOTICE") // OUTAGE | DEGRADED | MAINTENANCE | NOTICE
+  status     String    @default("INVESTIGATING") // INVESTIGATING | IDENTIFIED | MONITORING | RESOLVED
+  isPublic   Boolean   @default(true)
+  updates    Json      @default("[]")
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@map("platform_incidents")
+}
+
+// ─── LAYER 12: MERCHANT SUBSCRIPTION PAYMENTS ──────────────────────────────
+model MerchantPayment {
+  id            String    @id @default(cuid())
+  storeId       String
+  merchantId    String
+  invoiceId     String?
+  amount        Decimal   @db.Decimal(10, 3)
+  currency      String    @default("BHD")
+  paymentMethod String?   // TAP | MADA | APPLE_PAY | KNET | CARD | MANUAL
+  status        String    @default("PENDING") // PENDING | PAID | FAILED | REFUNDED
+  gatewayRef    String?   // Tap charge ID or other ref
+  tapPaymentUrl String?   // hosted payment URL
+  retryCount    Int       @default(0)
+  failedAt      DateTime?
+  paidAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  store         Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([merchantId])
+  @@map("merchant_payments")
+}
+
+// ─── LAYER 13: API MANAGEMENT ──────────────────────────────────────────────
+model ApiUsageLog {
+  id         String   @id @default(cuid())
+  storeId    String
+  endpoint   String
+  method     String
+  statusCode Int
+  duration   Int
+  ip         String?
+  userAgent  String?
+  version    String   @default("v1")
+  createdAt  DateTime @default(now())
+
+  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([createdAt])
+  @@map("api_usage_logs")
+}
+
+model ApiChangelog {
+  id          String   @id @default(cuid())
+  version     String
+  title       String
+  description String
+  type        String   @default("IMPROVEMENT")
+  isPublished Boolean  @default(true)
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@map("api_changelogs")
+}
+
+// ─── LAYER 14: ADVANCED SECURITY ──────────────────────────────────────────────
+model AdminIpWhitelist {
+  id        String   @id @default(cuid())
+  ip        String   @unique
+  label     String?
+  addedBy   String?
+  createdAt DateTime @default(now())
+
+  @@map("admin_ip_whitelist")
+}
+
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  ip        String
+  email     String?
+  success   Boolean  @default(false)
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([ip])
+  @@index([email])
+  @@index([createdAt])
+  @@map("login_attempts")
+}
+
+model SecuritySettings {
+  id                    String  @id @default("platform")
+  require2FAForAdmins   Boolean @default(false)
+  ipWhitelistEnabled    Boolean @default(false)
+  maxLoginAttempts      Int     @default(5)
+  banDurationMinutes    Int     @default(30)
+  sessionTimeoutMinutes Int     @default(120)
+  passwordMinLength     Int     @default(8)
+  passwordRequireUpper  Boolean @default(false)
+  passwordRequireNumber Boolean @default(false)
+  passwordExpiryDays    Int     @default(0)
+  updatedAt             DateTime @updatedAt
+
+  @@map("security_settings")
+}
+
+// ─────────────────────────────────────────────
+// LOCALIZATION — التوطين والتوسع (Layer 15)
+// ─────────────────────────────────────────────
+
+model SupportedLanguage {
+  id        String   @id @default(cuid())
+  code      String   @unique // e.g. "ar", "en", "fr"
+  name      String           // English name: Arabic
+  nameAr    String           // Arabic name: العربية
+  direction String   @default("ltr") // ltr | rtl
+  isActive  Boolean  @default(true)
+  isDefault Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("supported_languages")
+}
+
+model SupportedCurrency {
+  id            String   @id @default(cuid())
+  code          String   @unique // e.g. "BHD", "USD", "SAR"
+  name          String           // English name
+  nameAr        String           // Arabic name
+  symbol        String           // e.g. "BD", "$", "﷼"
+  symbolAr      String?          // Arabic symbol if different
+  exchangeRate  Decimal  @default(1) @db.Decimal(18, 6) // rate vs base currency
+  baseCurrency  Boolean  @default(false)               // only one should be true
+  decimalPlaces Int      @default(3)
+  isActive      Boolean  @default(true)
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  @@map("supported_currencies")
+}
+
+model SupportedCountry {
+  id            String   @id @default(cuid())
+  code          String   @unique // ISO 3166-1 alpha-2: "BH", "SA", "AE"
+  name          String
+  nameAr        String
+  phonePrefix   String?          // e.g. "+973"
+  currencyCode  String?          // default currency for this country
+  isActive      Boolean  @default(true)
+  isDefault     Boolean  @default(false)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("supported_countries")
+}
+
+model PlatformConfig {
+  id               String  @id @default("platform")
+  // Identity
+  platformName     String  @default("BahrainStore")
+  platformNameAr   String  @default("بحرين ستور")
+  logoUrl          String?
+  faviconUrl       String?
+  // Branding colors
+  primaryColor     String  @default("#3b82f6")
+  secondaryColor   String  @default("#8b5cf6")
+  accentColor      String  @default("#06b6d4")
+  // Company info (for invoices & emails)
+  companyName      String?
+  companyNameAr    String?
+  companyAddress   String?
+  companyAddressAr String?
+  companyPhone     String?
+  companyEmail     String?
+  companyVatNumber String?
+  companyCrNumber  String? // Commercial Registration
+  // Payment receiving account
+  bankName         String?
+  bankNameAr       String?
+  bankIban         String?
+  bankAccountName  String?
+  bankSwiftCode    String?
+  // Meta
+  supportEmail     String?
+  supportPhone     String?
+  baseCurrency     String  @default("BHD")
+  defaultLanguage  String  @default("ar")
+  updatedAt        DateTime @updatedAt
+
+  @@map("platform_config")
 }
