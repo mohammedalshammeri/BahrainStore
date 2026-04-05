@@ -24,6 +24,10 @@ api.interceptors.response.use(
     if (error?.response?.status === 401) {
       await SecureStore.deleteItemAsync(STORAGE_KEYS.authToken)
       await SecureStore.deleteItemAsync(STORAGE_KEYS.user)
+      await SecureStore.deleteItemAsync(STORAGE_KEYS.currentStoreId)
+      // Dynamic import avoids circular dependency (auth.store imports api)
+      const { useAuthStore } = await import('@/store/auth.store')
+      useAuthStore.setState({ user: null, token: null, currentStore: null, isAuthenticated: false })
     }
     return Promise.reject(error)
   }

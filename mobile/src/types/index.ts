@@ -39,6 +39,8 @@ export interface Product {
   isActive: boolean
   isFeatured: boolean
   images?: string[]
+  description?: string
+  weight?: number
   category?: { id: string; name: string; nameAr: string }
 }
 

@@ -22,6 +22,7 @@ export default function OrderDetailScreen() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const [trackingNumber, setTrackingNumber] = useState('')
+  const [trackingCompany, setTrackingCompany] = useState('Aramex')
   const [trackingModal, setTrackingModal] = useState(false)
 
   const { data, isLoading, refetch } = useQuery({
@@ -43,11 +44,12 @@ export default function OrderDetailScreen() {
   })
 
   const trackingMutation = useMutation({
-    mutationFn: (number: string) => ordersApi.addTracking(id, number, ''),
+    mutationFn: (number: string) => ordersApi.addTracking(id, number, trackingCompany),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['order', id] })
       setTrackingModal(false)
       setTrackingNumber('')
+      setTrackingCompany('Aramex')
     },
     onError: () => Alert.alert('خطأ', 'فشل تحديث رقم التتبع'),
   })
@@ -228,6 +230,24 @@ export default function OrderDetailScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>إضافة رقم التتبع</Text>
+            {/* Shipping company picker */}
+            <Text style={[styles.modalTitle, { fontSize: 13, color: COLORS.textSecondary, marginBottom: 6 }]}>شركة الشحن</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              {['Aramex', 'DHL', 'FedEx', 'Bosta', 'Fastlo', 'أخرى'].map(c => (
+                <TouchableOpacity
+                  key={c}
+                  style={{
+                    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
+                    backgroundColor: trackingCompany === c ? COLORS.primary : COLORS.background,
+                    borderWidth: 1,
+                    borderColor: trackingCompany === c ? COLORS.primary : COLORS.border,
+                  }}
+                  onPress={() => setTrackingCompany(c)}
+                >
+                  <Text style={{ fontSize: 13, color: trackingCompany === c ? '#fff' : COLORS.text }}>{c}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <TextInput
               style={styles.modalInput}
               value={trackingNumber}

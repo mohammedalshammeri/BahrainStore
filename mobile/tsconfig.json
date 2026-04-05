@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "lib": ["ES2020"],
+    "lib": [
+      "ES2020"
+    ],
     "jsx": "react-native",
     "module": "commonjs",
     "moduleResolution": "node",
@@ -13,14 +15,33 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "@/api/*": ["src/api/*"],
-      "@/screens/*": ["src/screens/*"],
-      "@/components/*": ["src/components/*"],
-      "@/store/*": ["src/store/*"],
-      "@/types": ["src/types/index.ts"],
-      "@/constants": ["src/constants/index.ts"]
+      "@/*": [
+        "src/*"
+      ],
+      "@/api/*": [
+        "src/api/*"
+      ],
+      "@/screens/*": [
+        "src/screens/*"
+      ],
+      "@/components/*": [
+        "src/components/*"
+      ],
+      "@/store/*": [
+        "src/store/*"
+      ],
+      "@/types": [
+        "src/types/index.ts"
+      ],
+      "@/constants": [
+        "src/constants/index.ts"
+      ]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.d.ts", "expo-env.d.ts"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.d.ts"
+  ],
+  "extends": "expo/tsconfig.base"
 }

@@ -34,7 +34,7 @@ function NotifTabIcon({ focused }: { focused: boolean }) {
 
   return (
     <View style={{ position: 'relative' }}>
-      <TabIcon label="الطلبات" emoji="📋" focused={focused} />
+      <TabIcon label="الإشعارات" emoji="🔔" focused={focused} />
       {data > 0 && (
         <View style={tabStyles.badge}>
           <Text style={tabStyles.badgeText}>{data > 9 ? '9+' : data}</Text>
@@ -94,11 +94,22 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'الإشعارات',
+          tabBarIcon: ({ focused }) => <NotifTabIcon focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: 'الإعدادات',
           tabBarIcon: ({ focused }) => <TabIcon label="الإعدادات" emoji="⚙️" focused={focused} />,
         }}
+      />
+      <Tabs.Screen
+        name="analytics"
+        options={{ title: 'التحليلات', href: null as any }}
       />
     </Tabs>
   )

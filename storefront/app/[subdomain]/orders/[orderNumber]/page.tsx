@@ -34,6 +34,12 @@ export default function OrderTrackingPage() {
       return res.data.order;
     },
     enabled: !!orderNumber,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      // Stop polling once order is in a terminal state
+      if (status === "DELIVERED" || status === "CANCELLED" || status === "RETURNED") return false;
+      return 30_000; // Poll every 30 seconds for live updates
+    },
   });
 
   if (isLoading) {

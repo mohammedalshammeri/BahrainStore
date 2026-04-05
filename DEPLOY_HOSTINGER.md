@@ -3,7 +3,7 @@
 ## المتطلبات
 - Hostinger VPS (KVM 2 أو أعلى — الذاكرة 4GB على الأقل)  
 - نظام Ubuntu 24.04 LTS  
-- نطاق: bazar.bh (أو نطاقك)
+- نطاق: bazar.bsmc.bh (أو نطاقك)
 
 ---
 
@@ -58,19 +58,19 @@ nano .env   # عدّل DOMAIN و POSTGRES_PASSWORD و JWT_SECRET
 
 ```bash
 # شهادة للـ API والداشبورد
-sudo certbot certonly --standalone -d api.bazar.bh -d dashboard.bazar.bh
+sudo certbot certonly --standalone -d api.bazar.bsmc.bh -d dashboard.bazar.bsmc.bh
 
 # شهادة wildcard للمتاجر الفرعية (تحتاج DNS challenge)
-sudo certbot certonly --manual --preferred-challenges dns -d "*.bazar.bh"
+sudo certbot certonly --manual --preferred-challenges dns -d "*.bazar.bsmc.bh"
 
 # انسخ الشهادات إلى مجلد nginx
 mkdir -p /opt/bazar/nginx/certs
-sudo cp /etc/letsencrypt/live/api.bazar.bh/fullchain.pem  nginx/certs/api.bazar.bh.crt
-sudo cp /etc/letsencrypt/live/api.bazar.bh/privkey.pem    nginx/certs/api.bazar.bh.key
-sudo cp /etc/letsencrypt/live/dashboard.bazar.bh/fullchain.pem  nginx/certs/dashboard.bazar.bh.crt
-sudo cp /etc/letsencrypt/live/dashboard.bazar.bh/privkey.pem    nginx/certs/dashboard.bazar.bh.key
-sudo cp /etc/letsencrypt/live/*.bazar.bh/fullchain.pem  nginx/certs/wildcard.bazar.bh.crt
-sudo cp /etc/letsencrypt/live/*.bazar.bh/privkey.pem    nginx/certs/wildcard.bazar.bh.key
+sudo cp /etc/letsencrypt/live/api.bazar.bsmc.bh/fullchain.pem  nginx/certs/api.bazar.bsmc.bh.crt
+sudo cp /etc/letsencrypt/live/api.bazar.bsmc.bh/privkey.pem    nginx/certs/api.bazar.bsmc.bh.key
+sudo cp /etc/letsencrypt/live/dashboard.bazar.bsmc.bh/fullchain.pem  nginx/certs/dashboard.bazar.bsmc.bh.crt
+sudo cp /etc/letsencrypt/live/dashboard.bazar.bsmc.bh/privkey.pem    nginx/certs/dashboard.bazar.bsmc.bh.key
+sudo cp /etc/letsencrypt/live/*.bazar.bsmc.bh/fullchain.pem  nginx/certs/wildcard.bazar.bsmc.bh.crt
+sudo cp /etc/letsencrypt/live/*.bazar.bsmc.bh/privkey.pem    nginx/certs/wildcard.bazar.bsmc.bh.key
 ```
 
 ---
@@ -84,7 +84,7 @@ sudo cp /etc/letsencrypt/live/*.bazar.bh/privkey.pem    nginx/certs/wildcard.baz
 | A     | @           | IP_الخادم         |
 | A     | api         | IP_الخادم         |
 | A     | dashboard   | IP_الخادم         |
-| A     | *           | IP_الخادم         |
+| A     | *.bazar     | IP_الخادم         |
 
 ---
 

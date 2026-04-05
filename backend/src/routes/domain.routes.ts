@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import crypto from 'node:crypto'
+import dns from 'node:dns/promises'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
 
@@ -83,9 +84,16 @@ export async function domainRoutes(app: FastifyInstance) {
     const verification = await prisma.domainVerification.findUnique({ where: { storeId } })
     if (!verification) return reply.status(404).send({ error: 'لا يوجد طلب ربط دومين' })
 
-    // In production: use dns.resolve() to verify TXT record
-    // For now, simulate verification (mark as verified after DNS check attempt)
-    const isVerified = true // In prod: check DNS TXT record = verifyToken
+    // Verify DNS TXT record = verifyToken
+    let isVerified = false
+    try {
+      const records = await dns.resolveTxt(verification.domain)
+      const flat = records.flat()
+      isVerified = flat.includes(verification.verifyToken)
+    } catch {
+      // DNS lookup failed (domain not found or no TXT records)
+      isVerified = false
+    }
 
     if (isVerified) {
       await prisma.domainVerification.update({

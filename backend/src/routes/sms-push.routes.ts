@@ -1,8 +1,41 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import https from 'node:https'
+import webpush from 'web-push'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
+
+// ─── VAPID setup for web push ─────────────────────────────────────────────────
+const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || ''
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || ''
+const VAPID_EMAIL   = process.env.VAPID_EMAIL       || `mailto:${process.env.SMTP_USER || 'no-reply@bazar.bh'}`
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+  webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE)
+}
+
+// ─── OTP in-memory store (phone → {hash, expiresAt}) ─────────────────────────
+const otpStore = new Map<string, { hash: string; expiresAt: number }>()
+
+import { createHash } from 'node:crypto'
+function hashOtp(otp: string, phone: string) {
+  return createHash('sha256').update(`${otp}:${phone}`).digest('hex')
+}
+
+async function sendWebPush(
+  subscription: { endpoint: string; p256dh: string; auth: string },
+  payload: { title: string; body: string; icon?: string; url?: string }
+): Promise<boolean> {
+  if (!VAPID_PUBLIC || !VAPID_PRIVATE) return false
+  try {
+    await webpush.sendNotification(
+      { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
+      JSON.stringify(payload)
+    )
+    return true
+  } catch {
+    return false
+  }
+}
 
 function httpPost(url: string, body: object | string, headers: Record<string, string>): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -176,8 +209,28 @@ export async function smsRoutes(app: FastifyInstance) {
       return reply.status(500).send({ error: 'فشل إرسال SMS' })
     }
 
-    // In production: store OTP hash in Redis with TTL
+    // Store hashed OTP with 10-minute TTL
+    otpStore.set(phone, { hash: hashOtp(otp, phone), expiresAt: Date.now() + 10 * 60 * 1000 })
     return reply.send({ sent: true, message: 'تم إرسال رمز التحقق' })
+  })
+
+  // POST /sms/otp/verify — Validate OTP
+  app.post('/otp/verify', async (request, reply) => {
+    const { phone, otp } = request.body as { phone: string; otp: string }
+    if (!phone || !otp) return reply.status(400).send({ error: 'بيانات ناقصة' })
+
+    const record = otpStore.get(phone)
+    if (!record) return reply.status(400).send({ error: 'لم يتم طلب رمز OTP أو انتهت صلاحيته' })
+    if (record.expiresAt < Date.now()) {
+      otpStore.delete(phone)
+      return reply.status(400).send({ error: 'انتهت صلاحية الرمز — اطلب رمزاً جديداً' })
+    }
+    if (record.hash !== hashOtp(otp, phone)) {
+      return reply.status(400).send({ error: 'رمز غير صحيح' })
+    }
+
+    otpStore.delete(phone) // OTP يُستخدم مرة واحدة فقط
+    return reply.send({ verified: true })
   })
 }
 
@@ -260,9 +313,26 @@ export async function pushNotificationRoutes(app: FastifyInstance) {
       where: { storeId: campaign.storeId },
     })
 
-    // In production: use web-push library with VAPID keys
-    // For now: record the campaign as sent
-    const sentCount = subscriptions.length
+    // Send via web-push to all subscribers
+    const results = await Promise.allSettled(
+      subscriptions.map(sub =>
+        sendWebPush(
+          { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
+          { title: campaign.title, body: campaign.body, icon: campaign.imageUrl ?? undefined, url: campaign.targetUrl ?? undefined }
+        )
+      )
+    )
+    const sentCount = results.filter(r => r.status === 'fulfilled' && r.value).length
+
+    // Remove expired/invalid subscriptions
+    const failedEndpoints = subscriptions
+      .filter((_, i) => results[i].status === 'rejected')
+      .map(s => s.endpoint)
+    if (failedEndpoints.length > 0) {
+      await prisma.pushSubscription.deleteMany({
+        where: { storeId: campaign.storeId, endpoint: { in: failedEndpoints } },
+      })
+    }
 
     await prisma.pushNotificationCampaign.update({
       where: { id },
@@ -270,7 +340,7 @@ export async function pushNotificationRoutes(app: FastifyInstance) {
     })
 
     return reply.send({
-      message: `تم إرسال الإشعار إلى ${sentCount} مشترك`,
+      message: VAPID_PUBLIC ? `تم إرسال الإشعار إلى ${sentCount} مشترك` : 'لم يتم ضبط VAPID keys — أضف VAPID_PUBLIC_KEY وVAPID_PRIVATE_KEY في .env',
       sentCount,
     })
   })
@@ -303,7 +373,14 @@ export async function pushNotificationRoutes(app: FastifyInstance) {
     if (customerId) where.customerId = customerId
 
     const subscriptions = await prisma.pushSubscription.findMany({ where })
-    // In production: send via web-push
-    return reply.send({ sent: subscriptions.length, message: 'تم قائمة الإشعارات' })
+    if (VAPID_PUBLIC && VAPID_PRIVATE) {
+      const payload = { title, body, url }
+      await Promise.allSettled(
+        subscriptions.map(sub =>
+          sendWebPush({ endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }, payload)
+        )
+      )
+    }
+    return reply.send({ sent: subscriptions.length, message: 'تم إرسال الإشعارات' })
   })
 }

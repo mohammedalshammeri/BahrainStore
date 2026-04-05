@@ -48,10 +48,14 @@
           "icon": "./assets/notification-icon.png",
           "color": "#FF6B00"
         }
+      ],
+      [
+        "expo-image-picker",
+        { "photosPermission": "Allow Bazar to select product photos" }
       ]
     ],
     "extra": {
-      "apiUrl": "https://api.bazar.bh/api/v1",
+      "apiUrl": "https://api.bazar.bsmc.bh/api/v1",
       "eas": {
         "projectId": "bazar-merchant-app"
       }

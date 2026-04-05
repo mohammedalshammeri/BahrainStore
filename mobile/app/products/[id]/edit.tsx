@@ -42,6 +42,7 @@ export default function EditProductScreen() {
   const [sku, setSku]               = useState('')
   const [barcode, setBarcode]       = useState('')
   const [stock, setStock]           = useState('0')
+  const [weight, setWeight]         = useState('')
   const [isActive, setIsActive]     = useState(true)
   const [isFeatured, setIsFeatured] = useState(false)
   const [loaded, setLoaded]         = useState(false)
@@ -59,10 +60,11 @@ export default function EditProductScreen() {
     if (productData && !loaded) {
       const p = productData
       setName(p.name || ''); setNameAr(p.nameAr || '')
-      setDescription((p as any).description || '')
+      setDescription(p.description || '')
       setPrice(String(p.price || '')); setComparePrice(String(p.comparePrice || ''))
       setCostPrice(String(p.costPrice || '')); setSku(p.sku || '')
       setBarcode(p.barcode || ''); setStock(String(p.stock ?? 0))
+      setWeight(String(p.weight || ''))
       setIsActive(p.isActive ?? true); setIsFeatured(p.isFeatured ?? false)
       setLoaded(true)
     }
@@ -90,6 +92,7 @@ export default function EditProductScreen() {
     if (costPrice)    payload.costPrice    = parseFloat(costPrice)
     if (sku)          payload.sku          = sku.trim()
     if (barcode)      payload.barcode      = barcode.trim()
+    if (weight)       payload.weight       = parseFloat(weight)
     updateMutation.mutate(payload)
   }
 
@@ -115,6 +118,7 @@ export default function EditProductScreen() {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>📦 المخزون</Text>
           <Field label="الكمية" value={stock} onChange={setStock} keyboardType="number-pad" />
+          <Field label="الوزن (kg)" value={weight} onChange={setWeight} keyboardType="decimal-pad" placeholder="0.000" />
           <Field label="SKU" value={sku} onChange={setSku} />
           <Field label="Barcode" value={barcode} onChange={setBarcode} keyboardType="number-pad" />
         </View>

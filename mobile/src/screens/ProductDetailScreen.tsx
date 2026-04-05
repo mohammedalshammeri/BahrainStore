@@ -83,7 +83,7 @@ export default function ProductDetailScreen() {
   if (!product) return null
 
   const hasImage = product.images && product.images.length > 0
-  const imageUri = hasImage ? (typeof product.images![0] === 'string' ? product.images![0] : (product.images![0] as any)?.url) : null
+  const imageUri = hasImage ? (product.images![0] as string) : null
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 14 }}>

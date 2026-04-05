@@ -55,7 +55,7 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
         platform,
         embedUrl: embedUrl ?? null,
         status: 'SCHEDULED',
-      },
+      } as any, // platform & embedUrl added via migration 20260403120000
     })
 
     // For CUSTOM, return our RTMP URL. For social platforms the merchant streams

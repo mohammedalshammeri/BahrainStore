@@ -1,5 +1,120 @@
 # المهام المتبقية — منصة بازار
-> آخر تحديث: 1 أبريل 2026 | الإنجاز الحالي: **156/158 مهمة ✅**
+> آخر تحديث: 5 أبريل 2026 | الإنجاز الحالي: **~90% ✅**
+
+---
+
+## ❌ المهام المتبقية الآن
+
+---
+
+### 1️⃣ ✅ صفحات داشبورد ناقصة — تم الإنجاز
+
+| # | الصفحة | الحالة |
+|---|--------|--------|
+| 1 | `/staff` | ✅ مكتمل |
+| 2 | `/loyalty` | ✅ مكتمل |
+| 3 | `/flash-sales` | ✅ مكتمل |
+| 4 | `/inventory` | ✅ مكتمل |
+
+---
+
+### 2️⃣ متغيرات البيئة الناقصة في `.env`
+
+| # | المتغير | الحالة | الأهمية |
+|---|---------|--------|---------|
+| 5 | `GOOGLE_CLIENT_SECRET` | ⏳ ينتظر المستخدم | 🔴 تسجيل دخول Google لا يعمل |
+| 6 | `SMTP_PASS` | ❌ فارغ | 🔴 الإيميلات كلها معطلة |
+| 7 | `BENEFIT_MERCHANT_ID` | ❌ فارغ | 🔴 BenefitPay لا تعمل |
+| 8 | `BENEFIT_SECRET_KEY` | ❌ فارغ | 🔴 BenefitPay لا تعمل |
+| 9 | `TAP_SECRET_KEY` | ❌ فارغ | 🟡 Tap Payments معطلة |
+| 10 | `TWILIO_ACCOUNT_SID` / `AUTH_TOKEN` / `FROM` | ❌ فارغ | 🟢 اختياري — SMS |
+| 11 | `STRIPE_PLATFORM_SECRET_KEY` | ❌ فارغ | 🟢 اختياري |
+| 12 | `MOYASAR_PLATFORM_SECRET_KEY` | ❌ فارغ | 🟢 اختياري |
+
+---
+
+### 3️⃣ أمان — مهم جداً
+
+| # | المهمة | الأولوية |
+|---|--------|---------|
+| 13 | **تدوير مفتاح OpenAI** — المفتاح `sk-proj-NDvoHta3...` انكشف في المحادثة. اذهب لـ [platform.openai.com/api-keys](https://platform.openai.com/api-keys) وأنشئ مفتاحاً جديداً | 🔴 عاجل |
+
+---
+
+### 4️⃣ النشر على Hostinger VPS
+
+| # | الخطوة | الحالة |
+|---|--------|--------|
+| 14 | إنشاء VPS على Hostinger (Ubuntu 24.04) | ❌ |
+| 15 | تثبيت Docker + Docker Compose على الـ VPS | ❌ |
+| 16 | رفع الكود للـ VPS (git clone أو rsync) | ❌ |
+| 17 | إضافة DNS records: `A bazar.bsmc.bh → IP`، `A api.bazar.bsmc.bh → IP`، `A dashboard.bazar.bsmc.bh → IP`، `A *.bazar.bsmc.bh → IP` | ❌ |
+| 18 | تشغيل certbot للحصول على SSL: `certbot --nginx -d bazar.bsmc.bh -d api.bazar.bsmc.bh -d dashboard.bazar.bsmc.bh` | ❌ |
+| 19 | نسخ `backend/.env` للـ VPS | ❌ |
+| 20 | تشغيل `docker-compose up -d --build` | ❌ |
+| 21 | تطبيق migrations: `docker exec bazar-backend npx prisma migrate deploy` | ❌ |
+| 22 | التحقق من عمل كل شيء: `/health` endpoint + تسجيل دخول | ❌ |
+
+---
+
+### 5️⃣ تطبيق الجوال
+
+| # | المهمة | الأولوية |
+|---|--------|---------|
+| 23 | تثبيت dependencies: `cd mobile && npm install` | 🔴 عالية |
+| 24 | اختبار على محاكي: `npx expo start` | 🔴 عالية |
+| 25 | رفع على Google Play Store (يحتاج حساب مطور $25) | 🟢 لاحقاً |
+| 26 | رفع على Apple App Store (يحتاج Apple Developer Account $99/سنة) | 🟢 لاحقاً |
+
+---
+
+### 6️⃣ بعد النشر — إعداد البيانات الأولية
+
+| # | المهمة | الأولوية |
+|---|--------|---------|
+| 27 | إنشاء الـ Super Admin عبر: `POST /api/v1/admin/setup` مع `ADMIN_SETUP_TOKEN` | 🔴 |
+| 28 | تجربة إنشاء متجر أول وإضافة منتجات | 🟡 |
+| 29 | اختبار عملية شراء كاملة (كارت → BenefitPay → تأكيد الطلب → إيميل) | 🔴 |
+
+---
+
+## ✅ ما تم إنجازه (للمرجع)
+
+### الباكند — Backend
+- ✅ 62 Route كاملة تمثل كل ميزة في المنصة
+- ✅ Prisma schema كامل (60+ نموذج)
+- ✅ JWT Auth + Refresh tokens
+- ✅ Multi-tenant (كل متجر بـ subdomain)
+- ✅ BenefitPay, Tap, Stripe, Moyasar
+- ✅ AI (GPT-4o) لكتابة المحتوى وتحليل المتجر
+- ✅ WhatsApp Bot للتسوق (FSM)
+- ✅ Live Commerce مع YouTube/TikTok/Instagram
+- ✅ KYC/Verification routes
+- ✅ Docker جاهز للنشر
+
+### الداشبورد — Dashboard
+- ✅ 58 صفحة كاملة مع UI عربي
+- ✅ جميع الميزات: المنتجات، الطلبات، العملاء، الكوبونات، التحليلات...
+- ✅ AI Copilot، ZATCA، B2B، المطعم، Live Commerce، البادجز...
+- ❌ **4 صفحات ناقصة**: staff / loyalty / flash-sales / inventory
+
+### الواجهة الأمامية — Storefront
+- ✅ Multi-tenant بـ subdomain
+- ✅ عربي + إنجليزي
+- ✅ Cart + Wishlist + Compare
+- ✅ صفحات المنتج والفئات والبحث
+
+### تطبيق الجوال — Mobile
+- ✅ 9 شاشات كاملة: تسجيل دخول، داشبورد، طلبات، منتجات، POS، تحليلات، إعدادات
+- ✅ Zustand store + SecureStore
+- ❌ **لم يختبر بعد** (npm install + expo start)
+
+### البنية التحتية — Infrastructure
+- ✅ Dockerfile لكل تطبيق (3 ملفات)
+- ✅ docker-compose.yml مع nginx
+- ✅ nginx.conf مع SSL + Wildcard subdomains
+- ✅ .env.example للمرجع
+- ✅ DEPLOY_HOSTINGER.md — دليل النشر خطوة بخطوة
 
 ---
 

@@ -91,9 +91,9 @@ export async function buildServer() {
   await app.register(cors, {
     origin: (origin, cb) => {
       const allowed = [
-        'https://bazar.bh',
-        'https://dashboard.bazar.bh',
-        'https://storefront.bazar.bh',
+        'https://bazar.bsmc.bh',
+        'https://dashboard.bazar.bsmc.bh',
+        /^https:\/\/[a-z0-9-]+\.bazar\.bsmc\.bh$/,
         /^https?:\/\/localhost(:\d+)?$/,
         /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
       ]

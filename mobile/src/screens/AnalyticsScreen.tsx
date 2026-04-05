@@ -95,7 +95,7 @@ export default function AnalyticsScreen() {
     setRefreshing(false)
   }
 
-  const stats = data?.stats
+  const stats = data
 
   const chartData: { label: string; value: number }[] = (revenueData?.daily || [])
     .slice(-14)
