@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Video, Plus, Play, Square, Eye, ShoppingBag, Copy, Check } from "lucide-react";
+import { Video, Plus, Play, Square, Eye, ShoppingBag, Copy, Check, MessageSquare, Pin } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -52,6 +52,7 @@ export default function LiveCommercePage() {
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [selectedStreamId, setSelectedStreamId] = useState<string | null>(null);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -67,6 +68,16 @@ export default function LiveCommercePage() {
       return res.data as any;
     },
     enabled: !!store?.id,
+  });
+
+  const { data: streamDetail } = useQuery({
+    queryKey: ["live-stream-detail", selectedStreamId],
+    queryFn: async () => {
+      const res = await api.get(`/live/streams/${selectedStreamId}`);
+      return res.data as any;
+    },
+    enabled: !!selectedStreamId,
+    refetchInterval: 15000,
   });
 
   const createMutation = useMutation({
@@ -98,6 +109,11 @@ export default function LiveCommercePage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["live-streams"] }),
   });
 
+  const pinMutation = useMutation({
+    mutationFn: async ({ msgId, pinned }: { msgId: string; pinned: boolean }) => api.patch(`/live/chat/${msgId}/pin`, { pinned }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["live-stream-detail", selectedStreamId] }),
+  });
+
   const copyRtmp = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -106,7 +122,14 @@ export default function LiveCommercePage() {
 
   const streams = data?.streams || [];
   const liveStream = streams.find((s: any) => s.status === "LIVE");
+  const detailStream = streamDetail?.stream;
   const selectedPlatformInfo = PLATFORMS.find((p) => p.value === form.platform)!;
+
+  useEffect(() => {
+    if (!selectedStreamId && streams.length > 0) {
+      setSelectedStreamId((liveStream || streams[0]).id);
+    }
+  }, [selectedStreamId, streams, liveStream]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -247,7 +270,8 @@ export default function LiveCommercePage() {
         {isLoading ? (
           <div className="text-center py-12 text-gray-500">جارٍ التحميل...</div>
         ) : (
-          <div className="space-y-3">
+          <div className="grid gap-5 lg:grid-cols-[1.1fr,0.9fr]">
+            <div className="space-y-3">
             {streams.map((s: any) => {
               const st = STATUS_LABELS[s.status] || STATUS_LABELS.ENDED;
               const platform = PLATFORMS.find((p) => p.value === s.platform) ?? PLATFORMS[3];
@@ -271,6 +295,9 @@ export default function LiveCommercePage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge className={st.color}>{st.label}</Badge>
+                      <Button size="sm" variant="outline" onClick={() => setSelectedStreamId(s.id)}>
+                        التفاصيل
+                      </Button>
                       {s.status === "SCHEDULED" && (
                         <Button
                           size="sm"
@@ -286,6 +313,96 @@ export default function LiveCommercePage() {
                 </Card>
               );
             })}
+            </div>
+
+            <Card className="p-4 h-fit">
+              {!detailStream ? (
+                <div className="text-sm text-gray-500">اختر جلسة بث لعرض التفاصيل والتشغيل المباشر.</div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold text-gray-900">{detailStream.title}</h3>
+                        <p className="text-xs text-gray-500 mt-1">{formatDate(detailStream.createdAt)}</p>
+                      </div>
+                      <Badge className={(STATUS_LABELS[detailStream.status] || STATUS_LABELS.ENDED).color}>
+                        {(STATUS_LABELS[detailStream.status] || STATUS_LABELS.ENDED).label}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-xl bg-gray-50 p-3">
+                      <p className="text-gray-500">المشاهدون الآن</p>
+                      <p className="mt-1 text-xl font-bold text-gray-900">{detailStream.viewerCount || 0}</p>
+                    </div>
+                    <div className="rounded-xl bg-gray-50 p-3">
+                      <p className="text-gray-500">أعلى ذروة</p>
+                      <p className="mt-1 text-xl font-bold text-gray-900">{detailStream.peakViewers || 0}</p>
+                    </div>
+                    <div className="rounded-xl bg-gray-50 p-3">
+                      <p className="text-gray-500">منتجات مرتبطة</p>
+                      <p className="mt-1 text-xl font-bold text-gray-900">{detailStream._count?.products || 0}</p>
+                    </div>
+                    <div className="rounded-xl bg-gray-50 p-3">
+                      <p className="text-gray-500">رسائل الدردشة</p>
+                      <p className="mt-1 text-xl font-bold text-gray-900">{detailStream._count?.chatMessages || 0}</p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2">المنتجات على البث</h4>
+                    {detailStream.products?.length ? (
+                      <div className="space-y-2">
+                        {detailStream.products.map((item: any) => (
+                          <div key={item.id} className="flex items-center justify-between rounded-xl border border-gray-100 p-3">
+                            <div>
+                              <p className="text-sm font-medium text-gray-900">{item.product?.nameAr || item.product?.name}</p>
+                              <p className="text-xs text-gray-500">{Number(item.product?.price || 0).toFixed(3)} BHD · مخزون {item.product?.stock ?? 0}</p>
+                            </div>
+                            <ShoppingBag className="w-4 h-4 text-gray-400" />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">لا توجد منتجات مضافة لهذه الجلسة بعد.</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <MessageSquare className="w-4 h-4 text-gray-500" />
+                      <h4 className="text-sm font-semibold text-gray-900">آخر رسائل الدردشة</h4>
+                    </div>
+                    {detailStream.chatMessages?.length ? (
+                      <div className="space-y-2 max-h-80 overflow-y-auto">
+                        {detailStream.chatMessages.map((message: any) => (
+                          <div key={message.id} className="rounded-xl bg-gray-50 p-3">
+                            <div className="flex items-center justify-between gap-3 mb-1">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-gray-900">{message.senderName}</p>
+                                {message.isPinned && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">مثبتة</span>}
+                              </div>
+                              <button
+                                onClick={() => pinMutation.mutate({ msgId: message.id, pinned: !message.isPinned })}
+                                className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900"
+                              >
+                                <Pin className="w-3 h-3" />
+                                {message.isPinned ? "إلغاء التثبيت" : "تثبيت"}
+                              </button>
+                            </div>
+                            <p className="text-sm text-gray-700">{message.message}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">لا توجد رسائل حديثة لهذا البث.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </Card>
           </div>
         )}
 

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { findMerchantBlogPost, findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 function generateSlug(title: string): string {
@@ -18,7 +19,7 @@ export async function blogRoutes(app: FastifyInstance) {
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
     const merchantId = (request.user as any).id
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const skip = (Number(page) - 1) * Number(limit)
@@ -47,11 +48,10 @@ export async function blogRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const post = await prisma.blogPost.findUnique({ where: { id } })
-    if (!post) return reply.status(404).send({ error: 'المقال غير موجود' })
+    const ownedPost = await findMerchantBlogPost(merchantId, id)
+    if (!ownedPost) return reply.status(404).send({ error: 'المقال غير موجود' })
 
-    const store = await prisma.store.findFirst({ where: { id: post.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+    const post = await prisma.blogPost.findUnique({ where: { id } })
 
     return reply.send({ post })
   })
@@ -79,7 +79,7 @@ export async function blogRoutes(app: FastifyInstance) {
     const merchantId = (request.user as any).id
     const { storeId, slug, isPublished, ...data } = result.data
 
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const resolvedSlug = slug || generateSlug(data.title)
@@ -123,11 +123,8 @@ export async function blogRoutes(app: FastifyInstance) {
     if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
     const merchantId = (request.user as any).id
-    const existing = await prisma.blogPost.findUnique({ where: { id } })
+    const existing = await findMerchantBlogPost(merchantId, id)
     if (!existing) return reply.status(404).send({ error: 'المقال غير موجود' })
-
-    const store = await prisma.store.findFirst({ where: { id: existing.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const { isPublished, ...rest } = result.data
     const updateData: any = { ...rest }
@@ -145,11 +142,8 @@ export async function blogRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const existing = await prisma.blogPost.findUnique({ where: { id } })
+    const existing = await findMerchantBlogPost(merchantId, id)
     if (!existing) return reply.status(404).send({ error: 'المقال غير موجود' })
-
-    const store = await prisma.store.findFirst({ where: { id: existing.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     await prisma.blogPost.delete({ where: { id } })
     return reply.send({ message: 'تم حذف المقال' })

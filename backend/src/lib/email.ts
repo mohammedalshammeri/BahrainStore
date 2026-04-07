@@ -19,6 +19,16 @@ function createTransporter() {
 
 const transporter = createTransporter()
 
+function requireTransporter() {
+  if (!transporter) {
+    const error = new Error('EMAIL_NOT_CONFIGURED')
+    error.name = 'EMAIL_NOT_CONFIGURED'
+    throw error
+  }
+
+  return transporter
+}
+
 interface OrderEmailData {
   to: string
   customerName: string
@@ -394,6 +404,107 @@ export async function sendCustomAdminEmail(opts: {
     from: `"بزار" <${process.env.SMTP_FROM ?? process.env.SMTP_USER}>`,
     to: opts.to,
     subject: opts.subject,
+    html,
+  })
+}
+
+export async function sendStoreCampaignEmail(opts: {
+  to: string
+  firstName?: string | null
+  storeName: string
+  subject: string
+  body: string
+}): Promise<void> {
+  const safeBody = opts.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const html = `
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:Arial,sans-serif;direction:rtl;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;background:#f8fafc;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);">
+        <tr><td style="background:#1e293b;padding:20px 32px;text-align:center;">
+          <h1 style="color:#fff;margin:0;font-size:20px;">${opts.storeName}</h1>
+        </td></tr>
+        <tr><td style="padding:32px;">
+          <p style="color:#374151;font-size:16px;margin:0 0 16px;">أهلاً <strong>${opts.firstName ?? 'عميلنا'}</strong>،</p>
+          <div style="color:#374151;font-size:14px;line-height:1.7;white-space:pre-wrap;">${safeBody}</div>
+        </td></tr>
+        <tr><td style="background:#f8fafc;padding:14px;text-align:center;border-top:1px solid #e2e8f0;">
+          <p style="margin:0;color:#94a3b8;font-size:12px;">${opts.storeName} — عبر بزار</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+
+  const activeTransporter = requireTransporter()
+  await activeTransporter.sendMail({
+    from: `"${opts.storeName}" <${process.env.SMTP_FROM ?? process.env.SMTP_USER}>`,
+    to: opts.to,
+    subject: opts.subject,
+    html,
+  })
+}
+
+export async function sendKycDecisionEmail(opts: {
+  to: string
+  merchantName: string
+  status: 'APPROVED' | 'REJECTED'
+  reviewNote?: string | null
+  documentType: string
+  expiresAt?: Date | string | null
+  reVerifyBy?: Date | string | null
+}): Promise<void> {
+  const activeTransporter = requireTransporter()
+  const approved = opts.status === 'APPROVED'
+  const subject = approved
+    ? 'تمت الموافقة على وثيقة KYC الخاصة بك في بزار'
+    : 'تحديث مراجعة وثيقة KYC الخاصة بك في بزار'
+  const noteHtml = opts.reviewNote?.trim()
+    ? `<div style="margin-top:16px;padding:12px 14px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;"><p style="margin:0 0 6px;color:#475569;font-size:12px;font-weight:700;">ملاحظة فريق المراجعة</p><p style="margin:0;color:#0f172a;font-size:14px;line-height:1.7;">${opts.reviewNote.trim()}</p></div>`
+    : ''
+  const expiryHtml = opts.expiresAt
+    ? `<p style="margin:10px 0 0;color:#475569;font-size:13px;">تاريخ انتهاء الوثيقة المعتمدة: <strong>${new Date(opts.expiresAt).toLocaleDateString('ar-BH')}</strong></p>`
+    : ''
+  const reverifyHtml = opts.reVerifyBy
+    ? `<p style="margin:8px 0 0;color:#475569;font-size:13px;">موعد إعادة التحقق: <strong>${new Date(opts.reVerifyBy).toLocaleDateString('ar-BH')}</strong></p>`
+    : ''
+
+  const html = `
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:Arial,sans-serif;direction:rtl;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;background:#f8fafc;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);">
+        <tr><td style="background:${approved ? '#065f46' : '#991b1b'};padding:20px 32px;text-align:center;">
+          <h1 style="color:#fff;margin:0;font-size:20px;">${approved ? 'تمت الموافقة على وثيقة KYC' : 'تم رفض وثيقة KYC'}</h1>
+        </td></tr>
+        <tr><td style="padding:32px;">
+          <p style="color:#374151;font-size:16px;margin:0 0 16px;">أهلاً <strong>${opts.merchantName}</strong>،</p>
+          <p style="color:#475569;font-size:14px;line-height:1.8;margin:0;">تمت مراجعة وثيقة <strong>${opts.documentType}</strong> الخاصة بك.</p>
+          <div style="margin-top:16px;padding:14px;border-radius:12px;background:${approved ? 'rgba(16,185,129,.10)' : 'rgba(239,68,68,.10)'};border:1px solid ${approved ? 'rgba(16,185,129,.25)' : 'rgba(239,68,68,.25)'};">
+            <p style="margin:0;color:${approved ? '#047857' : '#b91c1c'};font-size:15px;font-weight:700;">${approved ? 'الحالة: موافق عليها' : 'الحالة: مرفوضة'}</p>
+            ${expiryHtml}
+            ${reverifyHtml}
+          </div>
+          ${noteHtml}
+          <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;">يمكنك متابعة حالة KYC من لوحة التاجر ورفع مستند جديد عند الحاجة.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+
+  await activeTransporter.sendMail({
+    from: `"بزار" <${process.env.SMTP_FROM ?? process.env.SMTP_USER}>`,
+    to: opts.to,
+    subject,
     html,
   })
 }

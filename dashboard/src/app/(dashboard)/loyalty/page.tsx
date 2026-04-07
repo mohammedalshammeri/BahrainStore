@@ -232,7 +232,6 @@ export default function LoyaltyPage() {
   const { data: txData, isLoading: txLoading } = useQuery({
     queryKey: ["loyalty-transactions", store?.id],
     queryFn: async () => {
-      // Get recent transactions across first 5 customers (demo overview)
       const res = await api.get("/loyalty/transactions", {
         params: { storeId: store!.id, limit: 30 },
       });

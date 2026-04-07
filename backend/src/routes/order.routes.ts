@@ -1,12 +1,18 @@
 import type { FastifyInstance } from 'fastify'
+import crypto from 'node:crypto'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
+import { createOrderTrackingToken, verifyOrderTrackingToken } from '../lib/order-tracking'
 import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../lib/email'
 import { sendWhatsAppOrderConfirmation, sendWhatsAppStatusUpdate } from '../lib/whatsapp'
 import { sendOrderConfirmationSms, sendOrderStatusUpdateSms } from '../lib/sms'
 import { createAramexShipment } from '../lib/aramex'
 import { createDhlShipment } from '../lib/dhl'
+import { issueBenefitPayRefund } from './benefitpay.routes'
+
+const inventoryConflictPrefix = 'INSUFFICIENT_STOCK:'
+const ORDER_DISPUTE_SUBJECT_PREFIX = 'ORDER_DISPUTE'
 
 const createOrderSchema = z.object({
   storeId: z.string().cuid(),
@@ -16,6 +22,7 @@ const createOrderSchema = z.object({
     'BENEFIT_PAY', 'CREDIMAX', 'VISA_MASTERCARD',
     'APPLE_PAY', 'GOOGLE_PAY', 'CASH_ON_DELIVERY',
     'BANK_TRANSFER', 'TABBY', 'TAMARA',
+    'TAP_PAYMENTS', 'MOYASAR',
   ]),
   items: z.array(z.object({
     productId: z.string().cuid(),
@@ -26,6 +33,74 @@ const createOrderSchema = z.object({
   notes: z.string().optional(),
   shippingCost: z.number().min(0).default(0),
 })
+
+function mergeTextNotes(...parts: Array<string | null | undefined>) {
+  const normalized = parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+
+  return normalized.length > 0 ? normalized.join('\n') : null
+}
+
+function encodeOrderDisputeSubject(orderId: string, title: string, returnId?: string | null) {
+  return [ORDER_DISPUTE_SUBJECT_PREFIX, orderId, returnId ?? '', title.replace(/\|/g, '/').trim()].join('|')
+}
+
+function parseOrderDisputeSubject(subject: string) {
+  const [prefix, orderId, returnId, ...titleParts] = subject.split('|')
+  if (prefix !== ORDER_DISPUTE_SUBJECT_PREFIX || !orderId) return null
+
+  return {
+    orderId,
+    returnId: returnId || null,
+    title: titleParts.join('|').trim() || 'نزاع طلب',
+  }
+}
+
+function calculateReturnRefundCeiling(orderItems: Array<{ id: string; total: unknown; quantity: number; price: unknown }>, returnItems: Array<{ orderItemId: string; quantity: number }>) {
+  const orderItemsById = new Map(orderItems.map((item) => [item.id, item]))
+  let maxRefundAmount = 0
+
+  for (const returnItem of returnItems) {
+    const orderItem = orderItemsById.get(returnItem.orderItemId)
+    if (!orderItem) {
+      return null
+    }
+
+    const unitPrice = orderItem.quantity > 0
+      ? Number(orderItem.total) / orderItem.quantity
+      : Number(orderItem.price)
+    maxRefundAmount += unitPrice * returnItem.quantity
+  }
+
+  return maxRefundAmount
+}
+
+async function syncOrderRefundStatus(orderId: string, orderTotal: number, orderStatus: string) {
+  const refundedReturns = await prisma.orderReturn.findMany({
+    where: {
+      orderId,
+      status: 'REFUNDED',
+    },
+    select: {
+      refundAmount: true,
+    },
+  })
+
+  const refundedAmount = refundedReturns.reduce((sum, current) => sum + Number(current.refundAmount), 0)
+  const isFullyRefunded = refundedAmount >= orderTotal
+  const paymentStatus = isFullyRefunded ? 'REFUNDED' : refundedAmount > 0 ? 'PARTIALLY_REFUNDED' : 'PAID'
+
+  await prisma.order.update({
+    where: { id: orderId },
+    data: {
+      status: isFullyRefunded ? 'REFUNDED' : orderStatus as any,
+      paymentStatus: paymentStatus as any,
+    },
+  })
+
+  return { refundedAmount, paymentStatus, isFullyRefunded }
+}
 
 export async function orderRoutes(app: FastifyInstance) {
   // ── Create Order ──────────────────────────────
@@ -40,6 +115,26 @@ export async function orderRoutes(app: FastifyInstance) {
     const store = await prisma.store.findUnique({ where: { id: storeId, isActive: true } })
     if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
 
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, storeId: true },
+    })
+
+    if (!customer || customer.storeId !== storeId) {
+      return reply.status(400).send({ error: 'العميل غير صالح لهذا المتجر' })
+    }
+
+    if (addressId) {
+      const address = await prisma.address.findUnique({
+        where: { id: addressId },
+        select: { id: true, customerId: true },
+      })
+
+      if (!address || address.customerId !== customerId) {
+        return reply.status(400).send({ error: 'عنوان التوصيل غير صالح لهذا العميل' })
+      }
+    }
+
     // Build order items with prices
     const orderItems: Array<{
       productId: string
@@ -50,6 +145,8 @@ export async function orderRoutes(app: FastifyInstance) {
       price: number
       quantity: number
       total: number
+      trackInventory: boolean
+      productNameAr: string
     }> = []
     let subtotal = 0
 
@@ -89,6 +186,8 @@ export async function orderRoutes(app: FastifyInstance) {
         price,
         quantity: item.quantity,
         total,
+        trackInventory: product.trackInventory,
+        productNameAr: product.nameAr,
       })
     }
 
@@ -112,10 +211,49 @@ export async function orderRoutes(app: FastifyInstance) {
     const total = subtotal + Number(shippingCost) + vatAmount - discountAmount
 
     // Generate order number
-    const orderNumber = `BZR-${Date.now().toString().slice(-8)}`
+    const orderNumber = `BZR-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
 
-    const order = await prisma.$transaction(async (tx) => {
-      const newOrder = await tx.order.create({
+    let order
+    try {
+      order = await prisma.$transaction(async (tx) => {
+        for (const item of orderItems) {
+          if (item.variantId) {
+            const variantUpdate = await tx.productVariant.updateMany({
+              where: {
+                id: item.variantId,
+                stock: { gte: item.quantity },
+              },
+              data: {
+                stock: { decrement: item.quantity },
+              },
+            })
+
+            if (variantUpdate.count !== 1) {
+              throw new Error(`${inventoryConflictPrefix}${item.productNameAr}`)
+            }
+            continue
+          }
+
+          if (!item.trackInventory) {
+            continue
+          }
+
+          const productUpdate = await tx.product.updateMany({
+            where: {
+              id: item.productId,
+              stock: { gte: item.quantity },
+            },
+            data: {
+              stock: { decrement: item.quantity },
+            },
+          })
+
+          if (productUpdate.count !== 1) {
+            throw new Error(`${inventoryConflictPrefix}${item.productNameAr}`)
+          }
+        }
+
+        const newOrder = await tx.order.create({
         data: {
           storeId, customerId, addressId, paymentMethod,
           orderNumber, subtotal, shippingCost,
@@ -131,38 +269,36 @@ export async function orderRoutes(app: FastifyInstance) {
           address: true,
           payment: true,
         },
-      })
+        })
 
-      // Deduct stock
-      for (const item of items) {
-        if (item.variantId) {
-          await tx.productVariant.update({
-            where: { id: item.variantId },
-            data: { stock: { decrement: item.quantity } },
-          })
-        } else {
-          await tx.product.update({
-            where: { id: item.productId },
-            data: { stock: { decrement: item.quantity } },
+        // Update coupon usage
+        if (couponCode) {
+          await tx.coupon.update({
+            where: { storeId_code: { storeId, code: couponCode.toUpperCase() } },
+            data: { usedCount: { increment: 1 } },
           })
         }
-      }
 
-      // Update coupon usage
-      if (couponCode) {
-        await tx.coupon.update({
-          where: { storeId_code: { storeId, code: couponCode.toUpperCase() } },
-          data: { usedCount: { increment: 1 } },
+        // Update customer stats
+        await tx.customer.update({
+          where: { id: customerId },
+          data: { totalOrders: { increment: 1 }, totalSpent: { increment: total } },
         })
+
+        return newOrder
+      })
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith(inventoryConflictPrefix)) {
+        return reply.status(409).send({ error: `المخزون لم يعد كافياً للمنتج: ${error.message.slice(inventoryConflictPrefix.length)}` })
       }
 
-      // Update customer stats
-      await tx.customer.update({
-        where: { id: customerId },
-        data: { totalOrders: { increment: 1 }, totalSpent: { increment: total } },
-      })
+      throw error
+    }
 
-      return newOrder
+    const trackToken = createOrderTrackingToken({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      storeId: order.storeId,
     })
 
     // Send confirmation email (fire-and-forget — never block the response)
@@ -223,7 +359,12 @@ export async function orderRoutes(app: FastifyInstance) {
       ).catch((err: unknown) => console.error('SMS send failed:', err))
     }
 
-    return reply.status(201).send({ message: 'تم إنشاء الطلب بنجاح', order })
+    return reply.status(201).send({
+      message: 'تم إنشاء الطلب بنجاح',
+      order,
+      trackToken,
+      trackUrl: `/${store.subdomain}/orders/${order.orderNumber}?token=${encodeURIComponent(trackToken)}`,
+    })
   })
 
   // ── List Orders (merchant) ────────────────────
@@ -446,9 +587,19 @@ export async function orderRoutes(app: FastifyInstance) {
   // ── Track Order by Number (public — storefront) ───────────────
   app.get('/track/:orderNumber', async (request, reply) => {
     const { orderNumber } = request.params as { orderNumber: string }
+    const { token } = request.query as { token?: string }
+
+    const verification = verifyOrderTrackingToken(token, orderNumber)
+    if (!verification.valid) {
+      return reply.status(403).send({ error: 'رابط التتبع غير صالح أو منتهي الصلاحية', code: 'INVALID_TRACKING_TOKEN' })
+    }
 
     const order = await prisma.order.findFirst({
-      where: { orderNumber },
+      where: {
+        id: verification.payload.orderId,
+        orderNumber,
+        storeId: verification.payload.storeId,
+      },
       select: {
         id: true,
         orderNumber: true,
@@ -461,12 +612,9 @@ export async function orderRoutes(app: FastifyInstance) {
         total: true,
         trackingNumber: true,
         shippingCompany: true,
-        notes: true,
         createdAt: true,
         paidAt: true,
         store: { select: { nameAr: true, name: true, subdomain: true } },
-        customer: { select: { firstName: true, lastName: true, phone: true } },
-        address: { select: { area: true, block: true, road: true, building: true, flat: true } },
         items: {
           select: {
             nameAr: true, name: true, quantity: true, price: true, total: true,
@@ -482,7 +630,10 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'الطلب غير موجود' })
     }
 
-    return reply.send({ order })
+    return reply.send({
+      order,
+      trackToken: token,
+    })
   })
 
   // ── Customer Orders by Phone (public — storefront) ────────────
@@ -610,6 +761,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
     const { carrier = 'aramex', weightKg = 0.5 } = request.body as { carrier?: string; weightKg?: number }
+    const normalizedCarrier = String(carrier).toLowerCase()
 
     const order = await prisma.order.findUnique({
       where: { id },
@@ -646,7 +798,7 @@ export async function orderRoutes(app: FastifyInstance) {
 
     let result
 
-    if (carrier === 'dhl') {
+    if (normalizedCarrier === 'dhl') {
       if (!settings?.dhlEnabled || !settings.dhlApiKey || !settings.dhlAccountNumber) {
         return reply.status(400).send({ error: 'DHL غير مفعل في إعدادات المتجر' })
       }
@@ -665,7 +817,27 @@ export async function orderRoutes(app: FastifyInstance) {
           where: { id },
           data: { trackingNumber: result.shipmentTrackingNumber, shippingCompany: 'DHL' },
         })
+
+        await prisma.shipmentTracking.upsert({
+          where: { orderId: id },
+          update: {
+            trackingNumber: result.shipmentTrackingNumber,
+            provider: 'DHL',
+            status: 'CREATED',
+            lastCheckedAt: new Date(),
+          },
+          create: {
+            orderId: id,
+            trackingNumber: result.shipmentTrackingNumber,
+            provider: 'DHL',
+            status: 'CREATED',
+            events: [],
+            lastCheckedAt: new Date(),
+          },
+        })
       }
+    } else if (normalizedCarrier !== 'aramex') {
+      return reply.status(400).send({ error: 'مزود الشحن غير مدعوم حالياً' })
     } else {
       if (!settings?.aramexEnabled || !settings.aramexUser || !settings.aramexPassword || !settings.aramexAccountNumber || !settings.aramexPinCode) {
         return reply.status(400).send({ error: 'Aramex غير مفعل في إعدادات المتجر' })
@@ -689,6 +861,24 @@ export async function orderRoutes(app: FastifyInstance) {
         await prisma.order.update({
           where: { id },
           data: { trackingNumber: result.awbNumber, shippingCompany: 'Aramex' },
+        })
+
+        await prisma.shipmentTracking.upsert({
+          where: { orderId: id },
+          update: {
+            trackingNumber: result.awbNumber,
+            provider: 'ARAMEX',
+            status: 'CREATED',
+            lastCheckedAt: new Date(),
+          },
+          create: {
+            orderId: id,
+            trackingNumber: result.awbNumber,
+            provider: 'ARAMEX',
+            status: 'CREATED',
+            events: [],
+            lastCheckedAt: new Date(),
+          },
         })
       }
     }
@@ -812,6 +1002,203 @@ export async function orderRoutes(app: FastifyInstance) {
     return reply.send({ returns })
   })
 
+  // ── Get Order Disputes ────────────────────────
+  app.get('/:id/disputes', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
+
+    const order = await prisma.order.findUnique({ where: { id }, include: { store: true } })
+    if (!order || order.store.merchantId !== merchantId) {
+      return reply.status(404).send({ error: 'الطلب غير موجود' })
+    }
+
+    const [tickets, orderReturns] = await Promise.all([
+      prisma.supportTicket.findMany({
+        where: {
+          storeId: order.storeId,
+          category: 'ORDER_DISPUTE',
+          subject: { startsWith: `${ORDER_DISPUTE_SUBJECT_PREFIX}|${id}|` },
+        },
+        include: { messages: { orderBy: { createdAt: 'asc' } } },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      prisma.orderReturn.findMany({
+        where: { orderId: id },
+        select: { id: true, returnNumber: true },
+      }),
+    ])
+
+    const returnNumbers = new Map(orderReturns.map((item) => [item.id, item.returnNumber]))
+    const disputes = tickets
+      .map((ticket) => {
+        const parsed = parseOrderDisputeSubject(ticket.subject)
+        if (!parsed || parsed.orderId !== id) return null
+
+        return {
+          id: ticket.id,
+          title: parsed.title,
+          returnId: parsed.returnId,
+          returnNumber: parsed.returnId ? returnNumbers.get(parsed.returnId) ?? null : null,
+          status: ticket.status,
+          priority: ticket.priority,
+          createdAt: ticket.createdAt,
+          updatedAt: ticket.updatedAt,
+          resolvedAt: ticket.resolvedAt,
+          assignedToName: ticket.assignedToName,
+          messages: ticket.messages,
+        }
+      })
+      .filter(Boolean)
+
+    return reply.send({ disputes })
+  })
+
+  // ── Create Order Dispute ─────────────────────
+  app.post('/:id/disputes', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
+
+    const parsed = z.object({
+      title: z.string().trim().min(3).max(160),
+      body: z.string().trim().min(10).max(4000),
+      priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+      returnId: z.string().trim().optional(),
+    }).safeParse(request.body)
+
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'بيانات النزاع غير صحيحة', details: parsed.error.flatten().fieldErrors })
+    }
+
+    const order = await prisma.order.findUnique({ where: { id }, include: { store: true } })
+    if (!order || order.store.merchantId !== merchantId) {
+      return reply.status(404).send({ error: 'الطلب غير موجود' })
+    }
+
+    let linkedReturn: { id: string; returnNumber: string } | null = null
+    if (parsed.data.returnId) {
+      linkedReturn = await prisma.orderReturn.findFirst({
+        where: { id: parsed.data.returnId, orderId: id },
+        select: { id: true, returnNumber: true },
+      })
+
+      if (!linkedReturn) {
+        return reply.status(400).send({ error: 'المرتجع المحدد لا يتبع هذا الطلب' })
+      }
+    }
+
+    const dispute = await prisma.supportTicket.create({
+      data: {
+        storeId: order.storeId,
+        merchantId,
+        subject: encodeOrderDisputeSubject(id, parsed.data.title, linkedReturn?.id),
+        category: 'ORDER_DISPUTE',
+        priority: (parsed.data.priority ?? 'HIGH') as any,
+        messages: {
+          create: {
+            senderType: 'MERCHANT',
+            senderId: merchantId,
+            body: parsed.data.body,
+          },
+        },
+      },
+      include: { messages: { orderBy: { createdAt: 'asc' } } },
+    })
+
+    return reply.status(201).send({
+      message: 'تم فتح النزاع وإحالته إلى فريق الدعم',
+      dispute: {
+        id: dispute.id,
+        title: parsed.data.title,
+        returnId: linkedReturn?.id ?? null,
+        returnNumber: linkedReturn?.returnNumber ?? null,
+        status: dispute.status,
+        priority: dispute.priority,
+        createdAt: dispute.createdAt,
+        updatedAt: dispute.updatedAt,
+        messages: dispute.messages,
+      },
+    })
+  })
+
+  // ── Reply To Order Dispute ───────────────────
+  app.post('/:id/disputes/:ticketId/messages', { preHandler: authenticate }, async (request, reply) => {
+    const { id, ticketId } = request.params as { id: string; ticketId: string }
+    const merchantId = (request.user as any).id
+
+    const parsed = z.object({ body: z.string().trim().min(1).max(4000) }).safeParse(request.body)
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'الرسالة غير صحيحة', details: parsed.error.flatten().fieldErrors })
+    }
+
+    const ticket = await prisma.supportTicket.findFirst({
+      where: {
+        id: ticketId,
+        merchantId,
+        category: 'ORDER_DISPUTE',
+      },
+      include: { messages: { orderBy: { createdAt: 'asc' } } },
+    })
+
+    if (!ticket) {
+      return reply.status(404).send({ error: 'النزاع غير موجود' })
+    }
+
+    const subject = parseOrderDisputeSubject(ticket.subject)
+    if (!subject || subject.orderId !== id) {
+      return reply.status(404).send({ error: 'النزاع لا يتبع هذا الطلب' })
+    }
+
+    if (ticket.status === 'CLOSED') {
+      return reply.status(400).send({ error: 'تم إغلاق النزاع بالفعل' })
+    }
+
+    const message = await prisma.ticketMessage.create({
+      data: {
+        ticketId,
+        senderType: 'MERCHANT',
+        senderId: merchantId,
+        body: parsed.data.body,
+      },
+    })
+
+    await prisma.supportTicket.update({
+      where: { id: ticketId },
+      data: { updatedAt: new Date(), status: ticket.status === 'RESOLVED' ? 'IN_PROGRESS' : ticket.status },
+    })
+
+    return reply.status(201).send({ message })
+  })
+
+  // ── Close Order Dispute ──────────────────────
+  app.patch('/:id/disputes/:ticketId/close', { preHandler: authenticate }, async (request, reply) => {
+    const { id, ticketId } = request.params as { id: string; ticketId: string }
+    const merchantId = (request.user as any).id
+
+    const ticket = await prisma.supportTicket.findFirst({
+      where: {
+        id: ticketId,
+        merchantId,
+        category: 'ORDER_DISPUTE',
+      },
+    })
+
+    if (!ticket) {
+      return reply.status(404).send({ error: 'النزاع غير موجود' })
+    }
+
+    const subject = parseOrderDisputeSubject(ticket.subject)
+    if (!subject || subject.orderId !== id) {
+      return reply.status(404).send({ error: 'النزاع لا يتبع هذا الطلب' })
+    }
+
+    const updated = await prisma.supportTicket.update({
+      where: { id: ticketId },
+      data: { status: 'CLOSED', resolvedAt: new Date() },
+    })
+
+    return reply.send({ message: 'تم إغلاق النزاع', dispute: updated })
+  })
+
   // ── Create Return Request ─────────────────────
   app.post('/:id/returns', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string }
@@ -832,13 +1219,72 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const count = await prisma.orderReturn.count({ where: { orderId: id } })
     const returnNumber = `R-${order.orderNumber}-${count + 1}`
+    const orderItemsById = new Map(order.items.map((item) => [item.id, item]))
+
+    if (!Array.isArray(returnItems) || returnItems.length === 0) {
+      return reply.status(400).send({ error: 'يجب اختيار عنصر واحد على الأقل للمرتجع' })
+    }
+
+    const existingReturnItems = await prisma.returnItem.findMany({
+      where: {
+        orderReturn: {
+          orderId: id,
+          status: { not: 'REJECTED' },
+        },
+      },
+      select: {
+        orderItemId: true,
+        quantity: true,
+      },
+    })
+
+    const alreadyReturnedQuantities = new Map<string, number>()
+    for (const item of existingReturnItems) {
+      alreadyReturnedQuantities.set(
+        item.orderItemId,
+        (alreadyReturnedQuantities.get(item.orderItemId) ?? 0) + item.quantity,
+      )
+    }
+
+    for (const returnItem of returnItems) {
+      const orderItem = orderItemsById.get(returnItem.orderItemId)
+      if (!orderItem) {
+        return reply.status(400).send({ error: 'أحد عناصر المرتجع لا يتبع هذا الطلب' })
+      }
+
+      if (!Number.isInteger(returnItem.quantity) || returnItem.quantity <= 0) {
+        return reply.status(400).send({ error: 'كمية عنصر المرتجع غير صحيحة' })
+      }
+
+      const alreadyReturned = alreadyReturnedQuantities.get(returnItem.orderItemId) ?? 0
+      if (returnItem.quantity + alreadyReturned > orderItem.quantity) {
+        return reply.status(400).send({ error: 'كمية المرتجع تتجاوز الكمية المتبقية القابلة للإرجاع في الطلب' })
+      }
+    }
+
+    const maxRefundAmount = calculateReturnRefundCeiling(order.items, returnItems)
+    if (maxRefundAmount === null) {
+      return reply.status(400).send({ error: 'تعذر احتساب سقف الاسترداد لعناصر المرتجع' })
+    }
+
+    const normalizedRefundAmount = refundAmount === undefined || refundAmount === null || refundAmount === ''
+      ? 0
+      : Number(refundAmount)
+
+    if (!Number.isFinite(normalizedRefundAmount) || normalizedRefundAmount < 0) {
+      return reply.status(400).send({ error: 'مبلغ الاسترداد غير صالح' })
+    }
+
+    if (normalizedRefundAmount > maxRefundAmount + 0.0001) {
+      return reply.status(400).send({ error: 'مبلغ الاسترداد يتجاوز قيمة العناصر المختارة للمرتجع' })
+    }
 
     const orderReturn = await prisma.orderReturn.create({
       data: {
         orderId: id,
         returnNumber,
         reason,
-        refundAmount: refundAmount ?? 0,
+        refundAmount: normalizedRefundAmount,
         refundMethod: refundMethod ?? 'original_payment',
         notes: notes ?? null,
         items: returnItems?.length > 0
@@ -868,6 +1314,26 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'الطلب غير موجود' })
     }
 
+    const orderReturn = await prisma.orderReturn.findFirst({
+      where: { id: returnId, orderId: id },
+      select: { id: true, status: true },
+    })
+
+    if (!orderReturn) {
+      return reply.status(404).send({ error: 'المرتجع غير موجود لهذا الطلب' })
+    }
+
+    const allowedTransitions: Record<string, string[]> = {
+      PENDING: ['APPROVED', 'REJECTED'],
+      APPROVED: ['REJECTED'],
+      REJECTED: [],
+      REFUNDED: [],
+    }
+
+    if (!allowedTransitions[orderReturn.status]?.includes(status)) {
+      return reply.status(400).send({ error: 'انتقال حالة المرتجع غير صالح' })
+    }
+
     const updated = await prisma.orderReturn.update({
       where: { id: returnId },
       data: {
@@ -877,14 +1343,119 @@ export async function orderRoutes(app: FastifyInstance) {
       },
     })
 
-    // If refunded, update order payment status
-    if (status === 'REFUNDED') {
-      await prisma.order.update({
-        where: { id },
-        data: { status: 'REFUNDED', paymentStatus: 'REFUNDED' },
-      })
+    return reply.send({ message: 'تم تحديث حالة المرتجع', orderReturn: updated })
+  })
+
+  app.post('/:id/returns/:returnId/refund', { preHandler: authenticate }, async (request, reply) => {
+    const { id, returnId } = request.params as { id: string; returnId: string }
+    const merchantId = (request.user as any).id
+
+    const parsed = z.object({
+      refundAmount: z.number().positive().optional(),
+      refundMethod: z.enum(['original_payment', 'store_credit', 'bank_transfer', 'manual']).optional(),
+      note: z.string().trim().max(1000).optional(),
+      reference: z.string().trim().max(255).optional(),
+    }).safeParse(request.body)
+
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'بيانات تنفيذ الاسترداد غير صحيحة', details: parsed.error.flatten().fieldErrors })
     }
 
-    return reply.send({ message: 'تم تحديث حالة المرتجع', orderReturn: updated })
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: {
+        store: true,
+        items: true,
+      },
+    })
+
+    if (!order || order.store.merchantId !== merchantId) {
+      return reply.status(404).send({ error: 'الطلب غير موجود' })
+    }
+
+    if (!['PAID', 'PARTIALLY_REFUNDED'].includes(order.paymentStatus)) {
+      return reply.status(400).send({ error: 'لا يمكن تنفيذ استرداد لطلب غير مدفوع' })
+    }
+
+    const orderReturn = await prisma.orderReturn.findFirst({
+      where: { id: returnId, orderId: id },
+      include: { items: true },
+    })
+
+    if (!orderReturn) {
+      return reply.status(404).send({ error: 'المرتجع غير موجود لهذا الطلب' })
+    }
+
+    if (orderReturn.status !== 'APPROVED') {
+      return reply.status(400).send({ error: 'يجب اعتماد المرتجع أولاً قبل تنفيذ الاسترداد' })
+    }
+
+    const maxRefundAmount = calculateReturnRefundCeiling(order.items, orderReturn.items)
+    if (maxRefundAmount === null) {
+      return reply.status(400).send({ error: 'تعذر احتساب سقف الاسترداد لهذا المرتجع' })
+    }
+
+    const requestedRefundAmount = parsed.data.refundAmount ?? Number(orderReturn.refundAmount)
+    if (!Number.isFinite(requestedRefundAmount) || requestedRefundAmount <= 0) {
+      return reply.status(400).send({ error: 'يجب تحديد مبلغ استرداد صالح قبل التنفيذ' })
+    }
+
+    if (requestedRefundAmount > maxRefundAmount + 0.0001) {
+      return reply.status(400).send({ error: 'مبلغ الاسترداد يتجاوز قيمة عناصر هذا المرتجع' })
+    }
+
+    const refundMethod = parsed.data.refundMethod ?? orderReturn.refundMethod ?? 'manual'
+    let gatewayRefundId: string | null = null
+    let message = 'تم تنفيذ الاسترداد بنجاح'
+
+    if (refundMethod === 'original_payment') {
+      if (order.paymentMethod !== 'BENEFIT_PAY') {
+        return reply.status(503).send({
+          error: 'الاسترداد عبر طريقة الدفع الأصلية غير مدعوم لهذا المزود حالياً',
+          status: 'NOT_READY',
+        })
+      }
+
+      const refundResult = await issueBenefitPayRefund({
+        merchantId,
+        orderId: id,
+        amount: requestedRefundAmount,
+        reason: parsed.data.note || orderReturn.reason,
+      })
+
+      if (!refundResult.ok) {
+        return reply.status(refundResult.statusCode).send(refundResult.body)
+      }
+
+      gatewayRefundId = refundResult.body.refundId ?? null
+      message = refundResult.body.message ?? message
+    }
+
+    const updatedReturn = await prisma.orderReturn.update({
+      where: { id: returnId },
+      data: {
+        status: 'REFUNDED',
+        refundAmount: requestedRefundAmount,
+        refundMethod,
+        processedAt: new Date(),
+        notes: mergeTextNotes(
+          orderReturn.notes,
+          parsed.data.note,
+          parsed.data.reference ? `Reference: ${parsed.data.reference}` : null,
+          gatewayRefundId ? `Gateway refund: ${gatewayRefundId}` : null,
+        ),
+      },
+      include: { items: true },
+    })
+
+    const refundSync = await syncOrderRefundStatus(id, Number(order.total), order.status)
+
+    return reply.send({
+      message,
+      orderReturn: updatedReturn,
+      refundedAmount: refundSync.refundedAmount,
+      paymentStatus: refundSync.paymentStatus,
+      gatewayRefundId,
+    })
   })
 }

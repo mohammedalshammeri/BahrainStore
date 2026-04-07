@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { getPublicApiUrl } from "@/lib/env";
 import { ClipboardList, Download, Filter, X, RefreshCw, Search } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
@@ -132,7 +133,7 @@ export default function AuditPage() {
     const exportParams = new URLSearchParams(params);
     exportParams.delete("page");
     exportParams.delete("limit");
-    window.open(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/v1/admin/audit/export?${exportParams.toString()}`, "_blank");
+    window.open(`${getPublicApiUrl()}/admin/audit/export?${exportParams.toString()}`, "_blank");
   }
 
   return (

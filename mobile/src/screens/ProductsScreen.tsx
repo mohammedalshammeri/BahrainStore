@@ -72,14 +72,18 @@ export default function ProductsScreen() {
     queryFn: async () => {
       const params: Record<string, any> = {}
       if (search.trim()) params.search = search.trim()
-      if (stockFilter !== 'ALL') params.stockStatus = stockFilter
       const res = await productsApi.list(storeId, params)
       return res.data
     },
     enabled: !!storeId,
   })
 
-  const products: Product[] = data?.products || []
+  const products: Product[] = (data?.products || []).filter((product: Product) => {
+    if (stockFilter === 'IN_STOCK') return product.stock > 5
+    if (stockFilter === 'LOW_STOCK') return product.stock > 0 && product.stock <= 5
+    if (stockFilter === 'OUT_OF_STOCK') return product.stock === 0
+    return true
+  })
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)

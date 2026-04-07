@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { findMerchantOrder, findMerchantPaymentByGatewayRef, findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 import https from 'node:https'
 import crypto from 'node:crypto'
@@ -15,6 +16,10 @@ const BENEFIT_MERCHANT_ID = process.env.BENEFIT_MERCHANT_ID || ''
 const BENEFIT_SECRET_KEY = process.env.BENEFIT_SECRET_KEY || ''
 const BENEFIT_CHECKOUT_URL = process.env.BENEFIT_CHECKOUT_URL || 'https://pgw.benefit.com.bh/pgw/payment'
 const APP_URL = process.env.APP_URL || 'https://app.bazar.bh'
+
+function isBenefitPayConfigured(): boolean {
+  return Boolean(BENEFIT_MERCHANT_ID && BENEFIT_SECRET_KEY)
+}
 
 // ─── Helper: HTTPS POST to BenefitPay gateway ────────────────────────────────
 function benefitPost(path: string, body: Record<string, any>, headers: Record<string, string> = {}): Promise<any> {
@@ -54,8 +59,115 @@ function signRequest(params: Record<string, string>): string {
 
 // ─── Verify inbound webhook signature ────────────────────────────────────────
 function verifyWebhookSignature(payload: Record<string, string>, signature: string): boolean {
+  if (!BENEFIT_SECRET_KEY) return false
+
+  const normalizedSignature = signature.trim().toUpperCase()
+  if (!/^[A-F0-9]+$/.test(normalizedSignature)) return false
+
   const computed = signRequest(payload)
-  return crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(signature, 'hex'))
+  if (computed.length !== normalizedSignature.length) return false
+
+  return crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(normalizedSignature, 'hex'))
+}
+
+export async function issueBenefitPayRefund(params: {
+  merchantId: string
+  orderId: string
+  amount?: number
+  reason?: string
+}) {
+  if (!isBenefitPayConfigured()) {
+    return {
+      ok: false as const,
+      statusCode: 503,
+      body: {
+        error: 'BenefitPay غير مهيأ في البيئة الحالية',
+        status: 'NOT_READY',
+      },
+    }
+  }
+
+  const order = await prisma.order.findFirst({
+    where: { id: params.orderId, store: { merchantId: params.merchantId } },
+    select: { id: true, total: true, paymentStatus: true, payment: { select: { gatewayRef: true } } },
+  })
+
+  if (!order) {
+    return {
+      ok: false as const,
+      statusCode: 404,
+      body: { error: 'الطلب غير موجود' },
+    }
+  }
+
+  if (!['PAID', 'PARTIALLY_REFUNDED'].includes(order.paymentStatus)) {
+    return {
+      ok: false as const,
+      statusCode: 400,
+      body: { error: 'لا يمكن استرداد طلب غير مدفوع' },
+    }
+  }
+
+  const refundAmount = params.amount || Number(order.total)
+  if (refundAmount > Number(order.total)) {
+    return {
+      ok: false as const,
+      statusCode: 400,
+      body: { error: 'مبلغ الاسترداد أكبر من قيمة الطلب' },
+    }
+  }
+
+  const requestParams: Record<string, string> = {
+    merchantId: BENEFIT_MERCHANT_ID,
+    originalOrderId: order.payment?.gatewayRef || params.orderId,
+    refundAmount: refundAmount.toFixed(3),
+    currency: 'BHD',
+    reason: params.reason || 'Customer refund request',
+  }
+  requestParams['signature'] = signRequest(requestParams)
+
+  try {
+    const refundResponse = await benefitPost('/refund/create', requestParams, {
+      'X-Merchant-ID': BENEFIT_MERCHANT_ID,
+    })
+
+    if (refundResponse.status === 'SUCCESS' || refundResponse.refundId) {
+      await prisma.order.update({
+        where: { id: params.orderId },
+        data: {
+          paymentStatus: refundAmount >= Number(order.total) ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+          notes: `BenefitPay Refund: ${refundResponse.refundId} | ${refundAmount.toFixed(3)} BHD`,
+        },
+      })
+
+      return {
+        ok: true as const,
+        body: {
+          success: true,
+          refundId: refundResponse.refundId,
+          amount: refundAmount,
+          currency: 'BHD',
+          message: 'تم إصدار الاسترداد بنجاح',
+        },
+      }
+    }
+
+    return {
+      ok: false as const,
+      statusCode: 400,
+      body: { error: 'فشل إصدار الاسترداد', details: refundResponse },
+    }
+  } catch (error: any) {
+    return {
+      ok: false as const,
+      statusCode: 502,
+      body: {
+        error: 'تعذر إصدار الاسترداد عبر BenefitPay',
+        status: 'GATEWAY_UNAVAILABLE',
+        details: error?.message ?? 'unknown_error',
+      },
+    }
+  }
 }
 
 export async function benefitPayRoutes(app: FastifyInstance) {
@@ -70,7 +182,18 @@ export async function benefitPayRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: parsed.error.flatten() })
 
+    if (!isBenefitPayConfigured()) {
+      return reply.status(503).send({
+        error: 'BenefitPay غير مهيأ في البيئة الحالية',
+        status: 'NOT_READY',
+      })
+    }
+
+    const merchantId = (request.user as any).id
     const { orderId, returnUrl, cancelUrl } = parsed.data
+
+    const ownedOrder = await findMerchantOrder(merchantId, orderId)
+    if (!ownedOrder) return reply.status(403).send({ error: 'غير مصرح' })
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -115,25 +238,10 @@ export async function benefitPayRoutes(app: FastifyInstance) {
       })
 
       if (!pgwResponse.sessionId) {
-        // If BenefitPay gateway is not reachable (sandbox/test mode), fallback
-        const mockSessionId = `MOCK-${crypto.randomUUID()}`
-        await prisma.order.update({
-          where: { id: orderId },
-          data: {
-            paymentReference: trackingId,
-            notes: `BenefitPay session initiated (test mode): ${mockSessionId}`,
-          },
-        })
-
-        return reply.send({
-          sessionId: mockSessionId,
-          paymentUrl: `${BENEFIT_CHECKOUT_URL}?sessionId=${mockSessionId}`,
-          trackingId,
-          orderId,
-          amount: amountFormatted,
-          currency,
-          testMode: true,
-          message: 'جلسة دفع جديدة (وضع الاختبار)',
+        return reply.status(502).send({
+          error: 'بوابة BenefitPay لم تُرجع sessionId صالحاً',
+          status: 'GATEWAY_UNAVAILABLE',
+          details: pgwResponse,
         })
       }
 
@@ -175,7 +283,11 @@ export async function benefitPayRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
+    const merchantId = (request.user as any).id
     const { orderId, transactionId } = parsed.data
+
+    const ownedOrder = await findMerchantOrder(merchantId, orderId)
+    if (!ownedOrder) return reply.status(403).send({ error: 'غير مصرح' })
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -233,7 +345,12 @@ export async function benefitPayRoutes(app: FastifyInstance) {
     // Verify signature from BenefitPay
     const { signature, ...params } = body
 
-    if (BENEFIT_SECRET_KEY && signature) {
+    if (BENEFIT_SECRET_KEY) {
+      if (!signature) {
+        app.log.warn('BenefitPay webhook missing signature')
+        return reply.status(401).send({ error: 'Missing signature' })
+      }
+
       const isValid = verifyWebhookSignature(params, signature)
       if (!isValid) {
         app.log.warn('BenefitPay webhook signature mismatch')
@@ -279,10 +396,7 @@ export async function benefitPayRoutes(app: FastifyInstance) {
     const { storeId } = request.params as { storeId: string }
     const merchantId = (request.user as any).id
 
-    const store = await prisma.store.findFirst({
-      where: { id: storeId, merchantId },
-      select: { id: true, name: true, currency: true },
-    })
+    const store = await findMerchantStore(merchantId, storeId)
 
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
@@ -319,72 +433,21 @@ export async function benefitPayRoutes(app: FastifyInstance) {
 
     const { orderId, amount, reason } = parsed.data
     const merchantId = (request.user as any).id
-
-    const order = await prisma.order.findFirst({
-      where: { id: orderId, store: { merchantId } },
-      select: { id: true, total: true, paymentStatus: true, storeId: true, payment: { select: { id: true, gatewayRef: true } } },
-    })
-
-    if (!order) return reply.status(404).send({ error: 'الطلب غير موجود' })
-    if (order.paymentStatus !== 'PAID') return reply.status(400).send({ error: 'لا يمكن استرداد طلب غير مدفوع' })
-
-    const refundAmount = amount || order.total
-    if (refundAmount > order.total) return reply.status(400).send({ error: 'مبلغ الاسترداد أكبر من قيمة الطلب' })
-
-    const requestParams: Record<string, string> = {
-      merchantId: BENEFIT_MERCHANT_ID,
-      originalOrderId: order.payment?.gatewayRef || orderId,
-      refundAmount: refundAmount.toFixed(3),
-      currency: 'BHD',
-      reason: reason || 'Customer refund request',
+    const refundResult = await issueBenefitPayRefund({ merchantId, orderId, amount, reason })
+    if (!refundResult.ok) {
+      return reply.status(refundResult.statusCode).send(refundResult.body)
     }
-    requestParams['signature'] = signRequest(requestParams)
 
-    try {
-      const refundResponse = await benefitPost('/refund/create', requestParams, {
-        'X-Merchant-ID': BENEFIT_MERCHANT_ID,
-      })
-
-      if (refundResponse.status === 'SUCCESS' || refundResponse.refundId) {
-        await prisma.order.update({
-          where: { id: orderId },
-          data: {
-            paymentStatus: refundAmount >= order.total ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
-            notes: `BenefitPay Refund: ${refundResponse.refundId} | ${refundAmount.toFixed(3)} BHD`,
-          },
-        })
-
-        return reply.send({
-          success: true,
-          refundId: refundResponse.refundId,
-          amount: refundAmount,
-          currency: 'BHD',
-          message: 'تم إصدار الاسترداد بنجاح',
-        })
-      }
-
-      return reply.status(400).send({ error: 'فشل إصدار الاسترداد', details: refundResponse })
-    } catch {
-      // For test/sandbox environments, simulate refund
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { paymentStatus: refundAmount >= order.total ? 'REFUNDED' : 'PARTIALLY_REFUNDED' },
-      })
-
-      return reply.send({
-        success: true,
-        refundId: `MOCK-REF-${Date.now()}`,
-        amount: refundAmount,
-        currency: 'BHD',
-        testMode: true,
-        message: 'تم إصدار الاسترداد (وضع الاختبار)',
-      })
-    }
+    return reply.send(refundResult.body)
   })
 
   // ─── GET /benefitpay/status/:trackingId — Query payment status by order ───
   app.get('/status/:trackingId', { preHandler: authenticate }, async (request, reply) => {
     const { trackingId } = request.params as { trackingId: string }
+    const merchantId = (request.user as any).id
+
+    const payment = await findMerchantPaymentByGatewayRef(merchantId, trackingId)
+    if (!payment) return reply.status(403).send({ error: 'غير مصرح' })
 
     const requestParams: Record<string, string> = {
       merchantId: BENEFIT_MERCHANT_ID,

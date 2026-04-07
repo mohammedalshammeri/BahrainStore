@@ -3,6 +3,8 @@
  * Official client for the Bazar e-commerce platform API
  */
 
+import crypto from 'node:crypto'
+
 export interface BazarConfig {
   apiKey: string
   storeId: string
@@ -29,6 +31,13 @@ export interface Product {
   createdAt: string
 }
 
+export interface ProductListResponse {
+  products: Product[]
+  total: number
+  page: number
+  pages: number
+}
+
 export interface Order {
   id: string
   orderNumber: string
@@ -37,16 +46,40 @@ export interface Order {
   createdAt: string
 }
 
+export interface OrderListResponse {
+  orders: Order[]
+  total: number
+  page: number
+  pages: number
+}
+
 export interface Customer {
   id: string
-  name: string
-  email: string
-  phone?: string
-  ordersCount: number
+  firstName: string
+  lastName: string
+  email?: string
+  phone: string
+  totalOrders: number
   totalSpent: number
+  loyaltyPoints?: number
+  createdAt?: string
+}
+
+export interface CustomerListResponse {
+  customers: Customer[]
+  total: number
+  page: number
+  pages: number
 }
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+export function verifyWebhookSignature(payload: string | Buffer, signature: string, secret: string): boolean {
+  const normalizedSignature = signature.replace(/^sha256=/, '')
+  const expectedSignature = crypto.createHmac('sha256', secret).update(payload).digest('hex')
+
+  return crypto.timingSafeEqual(Buffer.from(normalizedSignature), Buffer.from(expectedSignature))
+}
 
 export class BazarClient {
   private config: Required<BazarConfig>
@@ -60,7 +93,7 @@ export class BazarClient {
 
   constructor(config: BazarConfig) {
     this.config = {
-      baseUrl: 'https://api.bazar.bh',
+      baseUrl: config.baseUrl?.replace(/\/$/, '') ?? 'https://api.bazar.bh',
       ...config,
     }
 
@@ -70,6 +103,18 @@ export class BazarClient {
     this.categories = new CategoriesResource(this)
     this.coupons = new CouponsResource(this)
     this.inventory = new InventoryResource(this)
+  }
+
+  async info() {
+    return this.request('GET', '/')
+  }
+
+  async contract() {
+    return this.request('GET', '/contract')
+  }
+
+  async changelog() {
+    return this.request('GET', '/changelog')
   }
 
   async request<T = any>(method: HttpMethod, path: string, body?: any, params?: Record<string, any>): Promise<T> {
@@ -124,68 +169,64 @@ class BaseResource {
 }
 
 class ProductsResource extends BaseResource {
-  async list(options: ListOptions = {}) {
-    return this.client.request('GET', `/products`, undefined, {
-      storeId: this.storeId,
-      ...options,
-    })
+  async list(options: ListOptions = {}): Promise<ProductListResponse> {
+    return this.client.request('GET', '/products', undefined, options)
   }
 
-  async get(id: string): Promise<Product> {
-    return this.client.request('GET', `/products/${id}`)
+  async get(slug: string) {
+    return this.getBySlug(slug)
   }
 
-  async getBySlug(slug: string): Promise<Product> {
-    return this.client.request('GET', `/products/slug/${slug}`, undefined, {
-      storeId: this.storeId,
-    })
+  async getBySlug(slug: string) {
+    return this.client.request('GET', `/products/${slug}`)
   }
 }
 
 class OrdersResource extends BaseResource {
-  async list(options: ListOptions = {}) {
-    return this.client.request('GET', `/orders`, undefined, {
-      storeId: this.storeId,
-      ...options,
-    })
+  async list(options: ListOptions = {}): Promise<OrderListResponse> {
+    return this.client.request('GET', '/orders', undefined, options)
   }
 
-  async get(id: string): Promise<Order> {
-    return this.client.request('GET', `/orders/${id}`)
+  async get(orderNumber: string) {
+    return this.client.request('GET', `/orders/${orderNumber}`)
   }
 
-  async create(data: any): Promise<Order> {
-    return this.client.request('POST', '/orders', { storeId: this.storeId, ...data })
+  async getByOrderNumber(orderNumber: string) {
+    return this.get(orderNumber)
   }
 
-  async updateStatus(id: string, status: string): Promise<Order> {
-    return this.client.request('PATCH', `/orders/${id}/status`, { status })
+  async create(data: any) {
+    return this.client.request('POST', '/orders', data)
   }
 }
 
 class CustomersResource extends BaseResource {
-  async list(options: ListOptions = {}) {
-    return this.client.request('GET', `/customers`, undefined, {
-      storeId: this.storeId,
-      ...options,
-    })
+  async list(options: ListOptions = {}): Promise<CustomerListResponse> {
+    return this.client.request('GET', '/customers', undefined, options)
   }
 
-  async get(id: string): Promise<Customer> {
-    return this.client.request('GET', `/customers/${id}`)
+  async get(phone: string) {
+    return this.client.request('GET', `/customers/${phone}`)
+  }
+
+  async getByPhone(phone: string) {
+    return this.get(phone)
+  }
+
+  async upsert(data: { firstName: string; lastName?: string; phone: string; email?: string }) {
+    return this.client.request('POST', '/customers', data)
   }
 }
 
 class CategoriesResource extends BaseResource {
   async list() {
-    return this.client.request('GET', `/categories`, undefined, { storeId: this.storeId })
+    return this.client.request('GET', '/categories')
   }
 }
 
 class CouponsResource extends BaseResource {
   async validate(code: string, orderValue: number) {
     return this.client.request('POST', '/coupons/validate', {
-      storeId: this.storeId,
       code,
       orderValue,
     })
@@ -193,10 +234,10 @@ class CouponsResource extends BaseResource {
 }
 
 class InventoryResource extends BaseResource {
-  async getStock(productId: string) {
-    return this.client.request('GET', `/inventory/stock`, undefined, {
-      storeId: this.storeId,
+  async getStock(productId: string, variantId?: string) {
+    return this.client.request('GET', '/inventory/stock', undefined, {
       productId,
+      variantId,
     })
   }
 }

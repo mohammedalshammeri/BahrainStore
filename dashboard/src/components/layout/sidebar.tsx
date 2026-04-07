@@ -331,7 +331,7 @@ export function Sidebar() {
             </Link>
           </li>
 
-          {(merchant as any)?.isAdmin && (
+          {(merchant as any)?.isAdmin && (merchant as any)?.platformAccess && (
             <li className="pt-2 mt-2 border-t border-indigo-900">
               <Link
                 href="/admin"

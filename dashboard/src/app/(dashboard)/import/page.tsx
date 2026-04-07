@@ -1,358 +1,569 @@
 "use client";
 
-import { useState } from "react";
+import { ChangeEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, CheckCircle2, Clock3, Eye, FileSpreadsheet, Rocket, UploadCloud, Wand2 } from "lucide-react";
 import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
+import { useToast } from "@/lib/toast";
 import { Header } from "@/components/layout/header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Download, CheckCircle, Clock, AlertCircle, Camera } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/utils";
 
 const PLATFORMS = [
-  { id: "SALLA",       name: "سلة",        icon: "🛒", color: "bg-green-500"  },
-  { id: "ZID",         name: "زد",         icon: "🔷", color: "bg-blue-600"   },
-  { id: "SHOPIFY",     name: "Shopify",    icon: "🟩", color: "bg-green-600"  },
-  { id: "WOOCOMMERCE", name: "WooCommerce",icon: "🟣", color: "bg-purple-600" },
-  { id: "CSV",         name: "ملف CSV",    icon: "📄", color: "bg-gray-600"   },
-];
+  { id: "SALLA", name: "سلة", icon: "🛒" },
+  { id: "ZID", name: "زد", icon: "🔷" },
+  { id: "SHOPIFY", name: "Shopify", icon: "🟩" },
+  { id: "WOOCOMMERCE", name: "WooCommerce", icon: "🟣" },
+] as const;
 
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  PENDING:    { label: "في الانتظار",     color: "bg-yellow-100 text-yellow-700" },
-  PROCESSING: { label: "جارٍ الاستيراد", color: "bg-blue-100 text-blue-700"     },
-  COMPLETED:  { label: "مكتمل",           color: "bg-green-100 text-green-700"   },
-  FAILED:     { label: "فشل",             color: "bg-red-100 text-red-700"       },
-  PARTIAL:    { label: "جزئي",            color: "bg-orange-100 text-orange-700" },
+const STATUS_LABELS: Record<string, { label: string; variant: "default" | "success" | "warning" | "error" | "info" | "brand" | "purple" }> = {
+  PENDING: { label: "في الانتظار", variant: "warning" },
+  PROCESSING: { label: "جارٍ الاستيراد", variant: "info" },
+  RUNNING: { label: "جارٍ الاستيراد", variant: "info" },
+  COMPLETED: { label: "مكتمل", variant: "success" },
+  DONE: { label: "مكتمل", variant: "success" },
+  FAILED: { label: "فشل", variant: "error" },
+  PARTIAL: { label: "جزئي", variant: "warning" },
 };
 
-const DEMO_POSTS = [
-  { id: "ig1", image: "https://placehold.co/400x400/f472b6/fff?text=Post+1", caption: "عطر فاخر جديد، رائحة زهر العود" },
-  { id: "ig2", image: "https://placehold.co/400x400/818cf8/fff?text=Post+2", caption: "حقيبة جلد يدوية الصنع - إصدار محدود" },
-  { id: "ig3", image: "https://placehold.co/400x400/34d399/fff?text=Post+3", caption: "منتج عضوي طبيعي 100%" },
-  { id: "ig4", image: "https://placehold.co/400x400/fb923c/fff?text=Post+4", caption: "ساعة يد سويسرية أصلية" },
-  { id: "ig5", image: "https://placehold.co/400x400/60a5fa/fff?text=Post+5", caption: "إكسسوار ذهبي فاخر" },
-  { id: "ig6", image: "https://placehold.co/400x400/a78bfa/fff?text=Post+6", caption: "مجموعة عناية بالبشرة" },
-];
+type ImportJob = {
+  id: string;
+  source: string;
+  status: string;
+  imported: number;
+  failed: number;
+  totalItems: number;
+  createdAt: string;
+  apiConfig?: Record<string, unknown>;
+};
+
+type PreviewSummary = {
+  totalRows: number;
+  blockedRows: number;
+  warningRows?: number;
+  validRows?: number;
+  variantRowCount?: number;
+};
+
+type PreviewRow = {
+  index: number;
+  severity?: string;
+  issues: Array<{ field: string; message: string; severity: string }>;
+  normalized: { title?: string | null; sku?: string | null; price?: number | null; stock?: number | null; category?: string | null };
+};
+
+type PreviewArtifact = {
+  fileName: string;
+  fileKind: string;
+  warnings: string[];
+  summary: PreviewSummary;
+  mapping: Array<{ field: string; header?: string | null; sourceHeader?: string | null; confidence: number; source: string }>;
+  rows: PreviewRow[];
+};
+
+type ImportReport = {
+  importedProducts: number;
+  skippedRows: number;
+};
+
+type ImportRemediation = {
+  summary: {
+    blockedRows: number;
+    warningRows: number;
+    skippedRows: number;
+    missingImageCount: number;
+    duplicateSkuCount: number;
+  };
+  actions: Array<{
+    key: string;
+    priority: "critical" | "high" | "medium";
+    label: string;
+    reason: string;
+    cta: string;
+    count?: number;
+  }>;
+  queue: Array<{
+    rowIndex: number;
+    severity: "blocked" | "warning";
+    title: string;
+    sku?: string;
+    issues: string[];
+    suggestedAction: string;
+  }>;
+};
+
+type PreviewResponse = {
+  job: ImportJob;
+  preview: PreviewArtifact;
+  report?: ImportReport;
+};
+
+type RemediationResponse = {
+  jobId: string;
+  remediation: ImportRemediation;
+};
+
+type PlatformImportBody = {
+  storeId: string | undefined;
+  source: string | null;
+  apiConfig?: {
+    accessToken?: string;
+    storeUrl?: string;
+    apiKey?: string;
+    apiSecret?: string;
+  };
+};
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "response" in error &&
+    typeof (error as { response?: unknown }).response === "object" &&
+    (error as { response?: { data?: unknown } }).response?.data &&
+    typeof (error as { response?: { data?: { error?: unknown } } }).response?.data?.error === "string"
+  ) {
+    return (error as { response?: { data?: { error?: string } } }).response?.data?.error || fallback;
+  }
+
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+function toBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result || "");
+      const payload = value.includes(",") ? value.split(",")[1] : value;
+      resolve(payload);
+    };
+    reader.onerror = () => reject(new Error("تعذر قراءة الملف"));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function ImportPage() {
   const { store } = useAuthStore();
+  const { showToast } = useToast();
   const queryClient = useQueryClient();
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string>("");
   const [credentials, setCredentials] = useState({ apiKey: "", shopUrl: "", consumerKey: "", consumerSecret: "" });
 
-  // Instagram import state
-  const [igStep, setIgStep] = useState<"idle" | "connect" | "posts" | "fill">("idle");
-  const [igPost, setIgPost] = useState<{ id: string; image: string; caption: string } | null>(null);
-  const [igForm, setIgForm] = useState({ nameAr: "", price: "", stock: "" });
-  const [igError, setIgError] = useState("");
-
-  const { data, isLoading } = useQuery({
+  const jobsQuery = useQuery({
     queryKey: ["import-jobs", store?.id],
     queryFn: async () => {
-      const res = await api.get(`/import/jobs?storeId=${store!.id}`);
-      return res.data as any;
+      const res = await api.get(`/import/jobs?storeId=${store?.id}`);
+      return res.data as { jobs: ImportJob[] };
     },
     enabled: !!store?.id,
     refetchInterval: 5000,
   });
 
-  const startMutation = useMutation({
+  const previewQuery = useQuery({
+    queryKey: ["import-preview", selectedJobId],
+    queryFn: async () => {
+      const res = await api.get(`/import/jobs/${selectedJobId}/preview`);
+      return res.data as PreviewResponse;
+    },
+    enabled: !!selectedJobId,
+  });
+
+  const remediationQuery = useQuery({
+    queryKey: ["import-remediation", selectedJobId],
+    queryFn: async () => {
+      const res = await api.get(`/import/jobs/${selectedJobId}/remediation`);
+      return res.data as RemediationResponse;
+    },
+    enabled: !!selectedJobId,
+    retry: false,
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const base64 = await toBase64(file);
+      const res = await api.post("/import/preview", {
+        storeId: store?.id,
+        fileName: file.name,
+        fileContent: base64,
+        encoding: "base64",
+      });
+      return res.data as PreviewResponse;
+    },
+    onSuccess: (data) => {
+      setSelectedJobId(data.job.id);
+      setFileName(data.preview.fileName);
+      queryClient.invalidateQueries({ queryKey: ["import-jobs", store?.id] });
+      showToast("تم إنشاء معاينة الملف بنجاح", "success");
+    },
+    onError: (error: unknown) => {
+      showToast(getApiErrorMessage(error, "تعذر توليد معاينة الملف"), "error");
+    },
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      const res = await api.post(`/import/jobs/${jobId}/approve`);
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["import-jobs", store?.id] });
+      previewQuery.refetch();
+      remediationQuery.refetch();
+      showToast("تم اعتماد المعاينة وبدأ التنفيذ", "success");
+    },
+    onError: (error: unknown) => {
+      showToast(getApiErrorMessage(error, "تعذر اعتماد المعاينة"), "error");
+    },
+  });
+
+  const startPlatformMutation = useMutation({
     mutationFn: async () => {
-      const body: any = { storeId: store!.id, source: selected };
-      if (selected === "SHOPIFY") {
-        body.shopifyDomain = credentials.shopUrl;
-        body.shopifyToken = credentials.apiKey;
-      } else if (selected === "WOOCOMMERCE") {
-        body.wcUrl = credentials.shopUrl;
-        body.wcConsumerKey = credentials.consumerKey;
-        body.wcConsumerSecret = credentials.consumerSecret;
-      } else if (selected === "SALLA" || selected === "ZID") {
-        body.apiKey = credentials.apiKey;
+      const body: PlatformImportBody = { storeId: store?.id, source: selectedPlatform };
+      if (selectedPlatform === "SHOPIFY") {
+        body.apiConfig = { storeUrl: credentials.shopUrl, accessToken: credentials.apiKey };
+      } else if (selectedPlatform === "WOOCOMMERCE") {
+        body.apiConfig = { storeUrl: credentials.shopUrl, apiKey: credentials.consumerKey, apiSecret: credentials.consumerSecret };
+      } else if (selectedPlatform === "SALLA" || selectedPlatform === "ZID") {
+        body.apiConfig = { accessToken: credentials.apiKey };
       }
       await api.post("/import/start", body);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["import-jobs"] });
-      setSelected(null);
+      queryClient.invalidateQueries({ queryKey: ["import-jobs", store?.id] });
+      showToast("تم بدء الاستيراد من المنصة الخارجية", "success");
+      setSelectedPlatform(null);
       setCredentials({ apiKey: "", shopUrl: "", consumerKey: "", consumerSecret: "" });
     },
+    onError: (error: unknown) => {
+      showToast(getApiErrorMessage(error, "تعذر بدء الاستيراد"), "error");
+    },
   });
 
-  const igPublishMutation = useMutation({
-    mutationFn: async () => {
-      if (!igPost || !igForm.nameAr.trim() || !igForm.price) throw new Error("بيانات ناقصة");
-      await api.post("/products", {
-        storeId: store!.id,
-        nameAr: igForm.nameAr,
-        name: igForm.nameAr,
-        description: igPost.caption,
-        price: parseFloat(igForm.price),
-        stock: parseInt(igForm.stock) || 0,
-        isActive: true,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      setIgStep("idle");
-      setIgPost(null);
-      setIgForm({ nameAr: "", price: "", stock: "" });
-      setIgError("");
-    },
-    onError: (e: any) => setIgError(e?.response?.data?.message ?? "حدث خطأ"),
-  });
+  const jobs = jobsQuery.data?.jobs ?? [];
+  const activeJob = jobs.find((job) => job.status === "PENDING" || job.status === "PROCESSING" || job.status === "RUNNING");
+  const readyRowCount = previewQuery.data ? previewQuery.data.preview.summary.totalRows - previewQuery.data.preview.summary.blockedRows : 0;
 
-  const jobs = data?.jobs || [];
-  const activeJob = jobs.find((j: any) => j.status === "PROCESSING");
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    await uploadMutation.mutateAsync(file);
+    event.target.value = "";
+  };
+
+  if (!store) {
+    return <div className="p-8 text-slate-500">جاري تحميل بيانات المتجر...</div>;
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header title="استيراد المنتجات" subtitle="نقل منتجاتك من منصتك القديمة بكل سهولة" />
+    <div className="min-h-screen bg-slate-50">
+      <Header title="مركز الاستيراد الذكي" subtitle="Preview قبل الكتابة، واعتماد صريح قبل التنفيذ، ثم تقرير نهائي على نفس المهمة." />
 
-      <div className="p-6 max-w-4xl mx-auto space-y-5">
-
-        {/* Instagram Import Section */}
-        <div className="rounded-2xl border-2 border-dashed border-pink-200 bg-gradient-to-br from-pink-50 to-purple-50 p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center text-white shrink-0">
-              <Camera className="h-5 w-5" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-bold text-slate-800">استيراد من انستقرام</h3>
-              <p className="text-xs text-slate-500">حول بوسطاتك مباشرة لمنتجات في متجرك</p>
-            </div>
-            {igStep === "idle" && (
-              <Button
-                size="sm"
-                className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white border-0 shrink-0"
-                onClick={() => setIgStep("connect")}
-              >
-                ربط الحساب
-              </Button>
-            )}
-            {igStep !== "idle" && (
-              <button
-                onClick={() => { setIgStep("idle"); setIgPost(null); }}
-                className="text-xs text-slate-500 hover:text-slate-700 shrink-0"
-              >
-                إغلاق
-              </button>
-            )}
-          </div>
-
-          {igStep === "connect" && (
-            <div className="text-center py-6 space-y-4">
-              <div className="h-16 w-16 rounded-full bg-white border-2 border-pink-200 flex items-center justify-center mx-auto">
-                <Camera className="h-8 w-8 text-pink-500" />
+      <div className="mx-auto max-w-7xl space-y-6 p-6" dir="rtl">
+        {activeJob && (
+          <Card className="border-blue-200 bg-blue-50 p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center gap-3">
+                <Clock3 className="h-5 w-5 animate-spin text-blue-600" />
+                <div>
+                  <div className="font-medium text-blue-900">مهمة نشطة: {activeJob.source}</div>
+                  <div className="text-sm text-blue-700">
+                    {(activeJob.imported || 0) + (activeJob.failed || 0)} / {activeJob.totalItems || "?"} صف
+                  </div>
+                </div>
               </div>
-              <div>
-                <p className="font-medium text-slate-800">تسجيل الدخول بانستقرام</p>
-                <p className="text-xs text-slate-500 mt-1">سيتم فتح نافذة تسجيل الدخول بحسابك — بازار لن يرى كلمة المرور</p>
-              </div>
-              <Button
-                className="bg-gradient-to-r from-pink-500 to-purple-600 text-white border-0 hover:from-pink-600 hover:to-purple-700"
-                onClick={() => setIgStep("posts")}
-              >
-                تسجيل الدخول بانستقرام (OAuth)
+              <Button variant="outline" size="sm" onClick={() => setSelectedJobId(activeJob.id)} icon={<Eye />}>
+                عرض التفاصيل
               </Button>
-              <p className="text-[10px] text-slate-400">عرض تجريبي — الإصدار النهائي يستخدم Instagram Basic Display API</p>
             </div>
-          )}
+          </Card>
+        )}
 
-          {igStep === "posts" && !igPost && (
-            <div className="space-y-3">
-              <p className="text-sm font-medium text-slate-700">اختر البوست الذي تريد تحويله لمنتج:</p>
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                {DEMO_POSTS.map(post => (
+        <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-6">
+            <Card className="overflow-hidden">
+              <div className="border-b border-slate-100 p-5">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600">
+                    <FileSpreadsheet className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">CSV / Excel مع معاينة ذكية</div>
+                    <div className="text-sm text-slate-500">ارفع الملف، راجع المطابقة والتنبيهات، ثم اعتمد التنفيذ.</div>
+                  </div>
+                </div>
+              </div>
+              <div className="p-5">
+                <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-300 bg-[linear-gradient(180deg,_#ffffff_0%,_#eef2ff_100%)] px-6 py-10 text-center transition hover:border-indigo-400 hover:bg-indigo-50/40">
+                  <UploadCloud className="mb-4 h-8 w-8 text-indigo-600" />
+                  <div className="text-base font-medium text-slate-900">ارفع ملف CSV أو XLSX</div>
+                  <div className="mt-2 text-sm text-slate-500">ندعم المعاينة الذكية، كشف الصفوف المحجوبة، وقراءة الأعمدة الشائعة تلقائياً.</div>
+                  <div className="mt-4 rounded-full bg-white px-4 py-2 text-xs text-slate-500 shadow-sm">
+                    {fileName || "لم يتم اختيار ملف بعد"}
+                  </div>
+                  <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileChange} />
+                </label>
+                <div className="mt-4 flex items-center gap-3 text-xs text-slate-500">
+                  <Badge variant="brand">Preview</Badge>
+                  <Badge variant="info">Mapping ذكي</Badge>
+                  <Badge variant="warning">Blocked rows قبل التنفيذ</Badge>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-semibold text-slate-900">استيراد من منصة خارجية</div>
+                  <div className="text-sm text-slate-500">هذا المسار يبقى مناسباً للنقل المباشر من سلة أو زد أو Shopify أو WooCommerce.</div>
+                </div>
+                <Badge variant="info">Direct Sync</Badge>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-4">
+                {PLATFORMS.map((platform) => (
                   <button
-                    key={post.id}
-                    onClick={() => {
-                      setIgPost(post);
-                      setIgStep("fill");
-                      setIgForm({ nameAr: post.caption.split("،")[0].trim(), price: "", stock: "" });
-                    }}
-                    className="relative aspect-square rounded-xl overflow-hidden border-2 border-transparent hover:border-pink-400 transition group"
+                    key={platform.id}
+                    onClick={() => setSelectedPlatform((current) => (current === platform.id ? null : platform.id))}
+                    className={`rounded-2xl border p-4 text-center transition ${
+                      selectedPlatform === platform.id ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}
                   >
-                    <img src={post.image} alt="" className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                      <span className="text-white text-xs font-bold">اختيار</span>
-                    </div>
+                    <div className="mb-2 text-2xl">{platform.icon}</div>
+                    <div className="text-sm font-medium text-slate-800">{platform.name}</div>
                   </button>
                 ))}
               </div>
-            </div>
-          )}
 
-          {igStep === "fill" && igPost && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="aspect-square rounded-xl overflow-hidden">
-                <img src={igPost.image} alt="" className="w-full h-full object-cover" />
-              </div>
-              <div className="space-y-3">
-                <p className="text-xs text-slate-500 line-clamp-3">{igPost.caption}</p>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-700">اسم المنتج (عربي)</label>
-                  <input
-                    type="text"
-                    value={igForm.nameAr}
-                    onChange={e => setIgForm(f => ({ ...f, nameAr: e.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-700">السعر (BHD)</label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={igForm.price}
-                      onChange={e => setIgForm(f => ({ ...f, price: e.target.value }))}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+              {selectedPlatform && (
+                <div className="mt-5 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  {(selectedPlatform === "SALLA" || selectedPlatform === "ZID") && (
+                    <Input
+                      dir="ltr"
+                      label="Access Token"
+                      value={credentials.apiKey}
+                      onChange={(event) => setCredentials((current) => ({ ...current, apiKey: event.target.value }))}
                     />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-700">الكمية</label>
-                    <input
-                      type="number"
-                      placeholder="0"
-                      value={igForm.stock}
-                      onChange={e => setIgForm(f => ({ ...f, stock: e.target.value }))}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
-                    />
-                  </div>
-                </div>
-                {igError && <p className="text-xs text-red-600">{igError}</p>}
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="flex-1" onClick={() => { setIgPost(null); setIgStep("posts"); }}>
-                    رجوع
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="flex-1 bg-gradient-to-r from-pink-500 to-purple-600 text-white border-0"
-                    disabled={!igForm.nameAr.trim() || !igForm.price || igPublishMutation.isPending}
-                    onClick={() => igPublishMutation.mutate()}
-                  >
-                    {igPublishMutation.isPending ? "جارٍ النشر..." : "نشر في المتجر"}
+                  )}
+                  {selectedPlatform === "SHOPIFY" && (
+                    <>
+                      <Input dir="ltr" label="Shop URL" value={credentials.shopUrl} onChange={(event) => setCredentials((current) => ({ ...current, shopUrl: event.target.value }))} />
+                      <Input dir="ltr" label="Admin API Access Token" value={credentials.apiKey} onChange={(event) => setCredentials((current) => ({ ...current, apiKey: event.target.value }))} />
+                    </>
+                  )}
+                  {selectedPlatform === "WOOCOMMERCE" && (
+                    <>
+                      <Input dir="ltr" label="Store URL" value={credentials.shopUrl} onChange={(event) => setCredentials((current) => ({ ...current, shopUrl: event.target.value }))} />
+                      <Input dir="ltr" label="Consumer Key" value={credentials.consumerKey} onChange={(event) => setCredentials((current) => ({ ...current, consumerKey: event.target.value }))} />
+                      <Input dir="ltr" label="Consumer Secret" value={credentials.consumerSecret} onChange={(event) => setCredentials((current) => ({ ...current, consumerSecret: event.target.value }))} />
+                    </>
+                  )}
+
+                  <Button loading={startPlatformMutation.isPending} onClick={() => startPlatformMutation.mutate()} icon={<Rocket />}>
+                    بدء الاستيراد
                   </Button>
                 </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Active job banner */}
-        {activeJob && (
-          <Card className="p-4 bg-blue-50 border-blue-200">
-            <div className="flex items-center gap-3">
-              <Clock className="w-5 h-5 text-blue-600 animate-spin" />
-              <div>
-                <div className="font-medium text-blue-800">جارٍ استيراد المنتجات من {activeJob.source}</div>
-                <div className="text-sm text-blue-600">
-                  {activeJob.processedCount || 0} / {activeJob.totalCount || "?"} منتج
-                </div>
-              </div>
-              <div className="mr-auto">
-                <div className="w-32 bg-blue-200 rounded-full h-2">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all"
-                    style={{ width: activeJob.totalCount ? `${(activeJob.processedCount / activeJob.totalCount) * 100}%` : "30%" }}
-                  />
-                </div>
-              </div>
-            </div>
-          </Card>
-        )}
-
-        {/* Platform Selection */}
-        <Card className="p-5">
-          <h3 className="font-semibold mb-4">اختر المنصة للاستيراد منها</h3>
-          <div className="grid grid-cols-5 gap-3">
-            {PLATFORMS.map(p => (
-              <button
-                key={p.id}
-                onClick={() => setSelected(selected === p.id ? null : p.id)}
-                className={`rounded-xl border-2 p-4 text-center transition-all ${selected === p.id ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"}`}
-              >
-                <div className="text-2xl mb-1">{p.icon}</div>
-                <div className="text-xs font-medium">{p.name}</div>
-              </button>
-            ))}
+              )}
+            </Card>
           </div>
-        </Card>
 
-        {/* Credentials Form */}
-        {selected && selected !== "CSV" && (
-          <Card className="p-5">
-            <h3 className="font-semibold mb-4">بيانات الاتصال — {PLATFORMS.find(p => p.id === selected)?.name}</h3>
-            <div className="space-y-3">
-              {(selected === "SALLA" || selected === "ZID") && (
-                <input
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                  dir="ltr"
-                  placeholder="API Key"
-                  value={credentials.apiKey}
-                  onChange={e => setCredentials(prev => ({ ...prev, apiKey: e.target.value }))}
-                />
-              )}
-              {selected === "SHOPIFY" && (
-                <>
-                  <input className="w-full border rounded-lg px-3 py-2 text-sm" dir="ltr" placeholder="mystore.myshopify.com" value={credentials.shopUrl} onChange={e => setCredentials(prev => ({ ...prev, shopUrl: e.target.value }))} />
-                  <input className="w-full border rounded-lg px-3 py-2 text-sm" dir="ltr" placeholder="Admin API Access Token" value={credentials.apiKey} onChange={e => setCredentials(prev => ({ ...prev, apiKey: e.target.value }))} />
-                </>
-              )}
-              {selected === "WOOCOMMERCE" && (
-                <>
-                  <input className="w-full border rounded-lg px-3 py-2 text-sm" dir="ltr" placeholder="https://yourstore.com" value={credentials.shopUrl} onChange={e => setCredentials(prev => ({ ...prev, shopUrl: e.target.value }))} />
-                  <input className="w-full border rounded-lg px-3 py-2 text-sm" dir="ltr" placeholder="Consumer Key" value={credentials.consumerKey} onChange={e => setCredentials(prev => ({ ...prev, consumerKey: e.target.value }))} />
-                  <input className="w-full border rounded-lg px-3 py-2 text-sm" dir="ltr" placeholder="Consumer Secret" value={credentials.consumerSecret} onChange={e => setCredentials(prev => ({ ...prev, consumerSecret: e.target.value }))} />
-                </>
-              )}
-            </div>
-            <Button className="mt-4" onClick={() => startMutation.mutate()} disabled={startMutation.isPending || !!activeJob}>
-              <Download className="w-4 h-4 mr-2" />
-              {startMutation.isPending ? "جارٍ البدء..." : "بدء الاستيراد"}
-            </Button>
-          </Card>
-        )}
+          <div className="space-y-6">
+            <Card className="p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-semibold text-slate-900">لوحة المعاينة</div>
+                  <div className="text-sm text-slate-500">راجع الصفوف والتنبيهات قبل الاعتماد النهائي.</div>
+                </div>
+                {previewQuery.data?.job && (
+                  <Button
+                    variant="success"
+                    size="sm"
+                    loading={approveMutation.isPending}
+                    disabled={previewQuery.data.job.status === "RUNNING" || previewQuery.data.job.status === "DONE"}
+                    onClick={() => approveMutation.mutate(previewQuery.data!.job.id)}
+                    icon={<CheckCircle2 />}
+                  >
+                    اعتماد التنفيذ
+                  </Button>
+                )}
+              </div>
 
-        {/* Import History */}
-        <Card className="overflow-hidden">
-          <div className="p-4 border-b font-semibold">سجل الاستيراد</div>
-          {isLoading ? (
-            <div className="p-8 text-center text-gray-500">جارٍ التحميل...</div>
-          ) : jobs.length === 0 ? (
-            <div className="p-8 text-center text-gray-400">لا يوجد سجل استيراد</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-600">
-                <tr>
-                  <th className="p-3 text-right">المنصة</th>
-                  <th className="p-3 text-right">المنتجات</th>
-                  <th className="p-3 text-right">الأخطاء</th>
-                  <th className="p-3 text-right">الحالة</th>
-                  <th className="p-3 text-right">التاريخ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((j: any) => {
-                  const s = STATUS_LABELS[j.status] || STATUS_LABELS.PENDING;
-                  return (
-                    <tr key={j.id} className="border-t">
-                      <td className="p-3 font-medium">{PLATFORMS.find(p => p.id === j.source)?.name || j.source}</td>
-                      <td className="p-3">{j.importedCount || 0} / {j.totalCount || "?"}</td>
-                      <td className="p-3 text-red-500">{j.errorCount || 0}</td>
-                      <td className="p-3"><Badge className={s.color}>{s.label}</Badge></td>
-                      <td className="p-3 text-gray-500">{formatDate(j.createdAt)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </Card>
+              {!selectedJobId ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  اختر مهمة من السجل أو ارفع ملفاً لتظهر المعاينة هنا.
+                </div>
+              ) : previewQuery.isLoading ? (
+                <div className="p-6 text-sm text-slate-500">جاري تحميل تفاصيل المعاينة...</div>
+              ) : previewQuery.data?.preview ? (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="brand">{previewQuery.data.preview.fileKind}</Badge>
+                    <Badge variant="info">{previewQuery.data.preview.summary.totalRows} صف</Badge>
+                    <Badge variant="success">{readyRowCount} قابل للمراجعة</Badge>
+                    <Badge variant="error">{previewQuery.data.preview.summary.blockedRows} محجوب</Badge>
+                  </div>
 
+                  {previewQuery.data.preview.warnings.length > 0 && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                      <div className="mb-2 flex items-center gap-2 font-medium text-amber-900">
+                        <AlertCircle className="h-4 w-4" />
+                        تنبيهات المعاينة
+                      </div>
+                      <div className="space-y-2 text-sm text-amber-800">
+                        {previewQuery.data.preview.warnings.map((warning) => (
+                          <div key={warning}>{warning}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="mb-3 flex items-center gap-2 font-medium text-slate-900">
+                      <Wand2 className="h-4 w-4 text-indigo-600" />
+                      المطابقة المقترحة للأعمدة
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      {previewQuery.data.preview.mapping.map((mapping) => (
+                        <div key={mapping.field} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                          <span className="font-medium text-slate-700">{mapping.field}</span>
+                          <span className="text-slate-500">{mapping.sourceHeader || "غير مرتبط"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="mb-3 font-medium text-slate-900">عينات من الصفوف</div>
+                    <div className="space-y-2">
+                      {previewQuery.data.preview.rows.slice(0, 6).map((row) => (
+                        <div key={row.index} className="rounded-2xl bg-slate-50 p-3 text-sm">
+                          {(() => {
+                            const isBlocked = row.severity === "blocked";
+                            return (
+                              <>
+                          <div className="mb-1 flex items-center justify-between">
+                            <span className="font-medium text-slate-800">صف #{row.index}</span>
+                            <Badge variant={isBlocked ? "error" : "success"}>{isBlocked ? "محجوب" : "قابل للمراجعة"}</Badge>
+                          </div>
+                          <div className="text-slate-600">{row.normalized.title || "بدون عنوان"}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            SKU: {row.normalized.sku || "-"} | السعر: {row.normalized.price ?? "-"} | المخزون: {row.normalized.stock ?? "-"}
+                          </div>
+                          {row.issues.length > 0 && <div className="mt-2 text-xs text-red-600">{row.issues.map((issue) => issue.message).join(" | ")}</div>}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {previewQuery.data.report && (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+                      تم التنفيذ: {previewQuery.data.report.importedProducts} منتج، {previewQuery.data.report.skippedRows} صف متجاوز.
+                    </div>
+                  )}
+
+                  {remediationQuery.data?.remediation && (
+                    <div className="space-y-4 rounded-2xl border border-slate-200 p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium text-slate-900">قائمة الإصلاحات المقترحة</div>
+                        <Badge variant="warning">{remediationQuery.data.remediation.actions.length} إجراءات</Badge>
+                      </div>
+
+                      <div className="grid gap-3">
+                        {remediationQuery.data.remediation.actions.map((action) => (
+                          <div key={action.key} className="rounded-2xl bg-slate-50 p-3">
+                            <div className="mb-1 flex items-center justify-between">
+                              <div className="font-medium text-slate-800">{action.label}</div>
+                              <Badge variant={action.priority === "critical" ? "error" : action.priority === "high" ? "warning" : "info"}>
+                                {action.priority}
+                              </Badge>
+                            </div>
+                            <div className="text-sm text-slate-600">{action.reason}</div>
+                            <div className="mt-2 text-xs text-slate-500">{action.cta}{action.count ? ` (${action.count})` : ""}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {remediationQuery.data.remediation.queue.length > 0 && (
+                        <div className="rounded-2xl bg-amber-50 p-4">
+                          <div className="mb-3 font-medium text-amber-900">الصفوف التي تحتاج متابعة</div>
+                          <div className="space-y-2">
+                            {remediationQuery.data.remediation.queue.slice(0, 6).map((item) => (
+                              <div key={`${item.rowIndex}-${item.title}`} className="rounded-xl bg-white p-3 text-sm">
+                                <div className="mb-1 flex items-center justify-between">
+                                  <span className="font-medium text-slate-800">صف #{item.rowIndex} - {item.title}</span>
+                                  <Badge variant={item.severity === "blocked" ? "error" : "warning"}>{item.severity}</Badge>
+                                </div>
+                                <div className="text-slate-600">{item.issues.join(" | ")}</div>
+                                <div className="mt-1 text-xs text-slate-500">{item.suggestedAction}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  هذه المهمة ليست معاينة ملف أو لم يعد artifact متاحاً.
+                </div>
+              )}
+            </Card>
+
+            <Card className="overflow-hidden">
+              <div className="border-b border-slate-100 p-4 font-semibold text-slate-900">سجل مهام الاستيراد</div>
+              {jobsQuery.isLoading ? (
+                <div className="p-8 text-center text-slate-500">جاري تحميل السجل...</div>
+              ) : jobs.length === 0 ? (
+                <div className="p-8 text-center text-slate-400">لا توجد مهام استيراد بعد.</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {jobs.map((job) => {
+                    const status = STATUS_LABELS[job.status] || STATUS_LABELS.PENDING;
+                    return (
+                      <button
+                        key={job.id}
+                        onClick={() => setSelectedJobId(job.id)}
+                        className="flex w-full items-center gap-4 px-4 py-4 text-right transition hover:bg-slate-50"
+                      >
+                        <div className="min-w-[68px]">
+                          <Badge variant={status.variant}>{status.label}</Badge>
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-medium text-slate-800">{job.apiConfig?.mode === "preview" ? "ملف مرفوع" : job.source}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {job.imported || 0} ناجح / {job.failed || 0} فشل / {job.totalItems || 0} إجمالي
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-400">{formatDate(job.createdAt)}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+
+            <Card className="border-pink-200 bg-pink-50 p-5">
+              <div className="mb-2 flex items-center gap-2 font-semibold text-pink-900">
+                <AlertCircle className="h-4 w-4" />
+                Instagram Import غير مفعل بعد
+              </div>
+              <div className="text-sm leading-6 text-pink-800">
+                ما زال هذا المسار غير موصول بعقد backend حقيقي، لذلك أبقيته معطلاً صراحةً بدلاً من واجهة توحي بأنه يعمل.
+              </div>
+            </Card>
+          </div>
+        </div>
       </div>
     </div>
   );

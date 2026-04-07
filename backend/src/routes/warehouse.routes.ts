@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { ensureProductBelongsToStore, ensureVariantBelongsToProduct, findMerchantStore, findMerchantWarehouse } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 // ─── Multi-location Inventory Routes ──────────────────────────────────────────
@@ -24,7 +25,7 @@ export async function warehouseRoutes(app: FastifyInstance) {
     const merchantId = (request.user as any).id
     const { storeId, ...data } = result.data
 
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     if (data.isDefault) {
@@ -40,7 +41,7 @@ export async function warehouseRoutes(app: FastifyInstance) {
     const { storeId } = request.query as { storeId: string }
     const merchantId = (request.user as any).id
 
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const warehouses = await prisma.warehouse.findMany({
@@ -56,16 +57,32 @@ export async function warehouseRoutes(app: FastifyInstance) {
   app.patch('/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
+    const schema = z.object({
+      name: z.string().min(1).optional(),
+      nameAr: z.string().min(1).optional(),
+      address: z.string().optional(),
+      city: z.string().optional(),
+      country: z.string().min(2).max(3).optional(),
+      isDefault: z.boolean().optional(),
+      isActive: z.boolean().optional(),
+    }).refine((value) => Object.keys(value).length > 0, { message: 'يجب إرسال حقل واحد على الأقل للتحديث' })
 
-    const warehouse = await prisma.warehouse.findFirst({
-      where: { id },
-      include: { store: true },
-    })
-    if (!warehouse || warehouse.store.merchantId !== merchantId) {
+    const result = schema.safeParse(request.body)
+    if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
+
+    const warehouse = await findMerchantWarehouse(merchantId, id)
+    if (!warehouse) {
       return reply.status(403).send({ error: 'غير مصرح' })
     }
 
-    const updated = await prisma.warehouse.update({ where: { id }, data: request.body as any })
+    if (result.data.isDefault) {
+      await prisma.warehouse.updateMany({
+        where: { storeId: warehouse.storeId, id: { not: id } },
+        data: { isDefault: false },
+      })
+    }
+
+    const updated = await prisma.warehouse.update({ where: { id }, data: result.data })
     return reply.send({ warehouse: updated })
   })
 
@@ -74,11 +91,8 @@ export async function warehouseRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const warehouse = await prisma.warehouse.findFirst({
-      where: { id },
-      include: { store: true },
-    })
-    if (!warehouse || warehouse.store.merchantId !== merchantId) {
+    const warehouse = await findMerchantWarehouse(merchantId, id)
+    if (!warehouse) {
       return reply.status(403).send({ error: 'غير مصرح' })
     }
     if (warehouse.isDefault) {
@@ -93,6 +107,10 @@ export async function warehouseRoutes(app: FastifyInstance) {
   app.get('/:id/stock', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string }
     const { page = 1, limit = 20 } = request.query as { page?: number; limit?: number }
+    const merchantId = (request.user as any).id
+
+    const warehouse = await findMerchantWarehouse(merchantId, id)
+    if (!warehouse) return reply.status(403).send({ error: 'غير مصرح' })
 
     const [stocks, total] = await Promise.all([
       prisma.warehouseStock.findMany({
@@ -112,6 +130,7 @@ export async function warehouseRoutes(app: FastifyInstance) {
   // PUT /warehouses/:id/stock — Update stock for a product in a warehouse
   app.put('/:id/stock', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
     const schema = z.object({
       productId: z.string().cuid(),
       variantId: z.string().optional(),
@@ -122,6 +141,17 @@ export async function warehouseRoutes(app: FastifyInstance) {
     if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
     const { productId, variantId, stock } = result.data
+
+    const warehouse = await findMerchantWarehouse(merchantId, id)
+    if (!warehouse) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const product = await ensureProductBelongsToStore(productId, warehouse.storeId)
+    if (!product) return reply.status(403).send({ error: 'المنتج لا يخص متجرك' })
+
+    if (variantId) {
+      const variant = await ensureVariantBelongsToProduct(variantId, productId)
+      if (!variant) return reply.status(400).send({ error: 'المتغير غير صالح لهذا المنتج' })
+    }
 
     const warehouseStock = await prisma.warehouseStock.upsert({
       where: {
@@ -153,6 +183,13 @@ export async function warehouseRoutes(app: FastifyInstance) {
   // GET /warehouses/total-stock/:storeId/:productId — Total stock across warehouses
   app.get('/total-stock/:storeId/:productId', { preHandler: authenticate }, async (request, reply) => {
     const { storeId, productId } = request.params as { storeId: string; productId: string }
+    const merchantId = (request.user as any).id
+
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const product = await ensureProductBelongsToStore(productId, storeId)
+    if (!product) return reply.status(404).send({ error: 'المنتج غير موجود' })
 
     const stocks = await prisma.warehouseStock.findMany({
       where: { product: { storeId }, productId },

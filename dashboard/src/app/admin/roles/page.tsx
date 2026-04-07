@@ -22,6 +22,7 @@ interface PlatformRole {
   canViewFinancials: boolean;
   canViewAuditLog: boolean;
   canManageContent: boolean;
+  canReviewKYC: boolean;
   canManageTeam: boolean;
   isSystem: boolean;
   _count: { members: number };
@@ -38,6 +39,7 @@ const PERMS: { key: keyof PlatformRole; label: string; labelAr: string }[] = [
   { key: "canViewFinancials", label: "View Financials",    labelAr: "عرض التقارير المالية" },
   { key: "canViewAuditLog",   label: "View Audit Log",     labelAr: "عرض سجل العمليات" },
   { key: "canManageContent",  label: "Manage Content",     labelAr: "إدارة المحتوى والمدونة" },
+  { key: "canReviewKYC",      label: "Review KYC",         labelAr: "مراجعة KYC للتجار" },
   { key: "canManageTeam",     label: "Manage Team",        labelAr: "إدارة فريق المنصة" },
 ];
 
@@ -45,7 +47,7 @@ const EMPTY_FORM = {
   name: "", nameAr: "", description: "",
   canViewMerchants: false, canDisableStore: false, canReplyTickets: false,
   canEditPlans: false, canManageApps: false, canViewFinancials: false,
-  canViewAuditLog: false, canManageContent: false, canManageTeam: false,
+  canViewAuditLog: false, canManageContent: false, canReviewKYC: false, canManageTeam: false,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -129,6 +131,7 @@ export default function RolesPage() {
       canReplyTickets: r.canReplyTickets, canEditPlans: r.canEditPlans,
       canManageApps: r.canManageApps, canViewFinancials: r.canViewFinancials,
       canViewAuditLog: r.canViewAuditLog, canManageContent: r.canManageContent,
+      canReviewKYC: r.canReviewKYC,
       canManageTeam: r.canManageTeam,
     });
     setEditId(r.id);
@@ -318,8 +321,9 @@ export default function RolesPage() {
                     value={form.name}
                     onChange={e => setForm(f => ({ ...f, name: e.target.value.toUpperCase() }))}
                     placeholder="SUPPORT"
+                    disabled={modal === "edit"}
                     className="w-full px-3 py-2 rounded-xl text-sm font-mono"
-                    style={{ background: "#060b18", border: "1px solid #1a2840", color: "#dce8f5" }}
+                    style={{ background: modal === "edit" ? "#0f172a" : "#060b18", border: "1px solid #1a2840", color: modal === "edit" ? "#64748b" : "#dce8f5" }}
                   />
                 </div>
                 <div>

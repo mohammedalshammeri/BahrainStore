@@ -6,77 +6,152 @@ import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
 import { Header } from "@/components/layout/header";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Palette, Star, Download, Eye, CheckCircle, Search, X, Layers, Sparkles, Settings } from "lucide-react";
+import { Palette, Star, Download, Eye, CheckCircle, Search, X, Layers, Sparkles, Settings, Copy, RefreshCw } from "lucide-react";
 import { formatBHD } from "@/lib/utils";
 
 const CATEGORIES = ["الكل", "أزياء", "إلكترونيات", "طعام", "صحة وجمال", "أثاث", "عام"];
 
+interface ThemeItem {
+  id: string;
+  slug: string;
+  name: string;
+  nameAr: string;
+  description: string | null;
+  descriptionAr: string | null;
+  thumbnailUrl: string | null;
+  demoUrl: string | null;
+  price: number;
+  isPremium: boolean;
+  authorName: string;
+  installCount: number;
+  rating: number;
+  ratingCount: number;
+  tags: string[];
+  isActive?: boolean;
+  licenseKey?: string;
+  purchasedAt?: string;
+  updatedAt?: string;
+  availableVersion?: string;
+  installedVersion?: string | null;
+  changelog?: string | null;
+  hasUpdateAvailable?: boolean;
+  latestVersionUpdatedAt?: string;
+  rollbackThemeId?: string | null;
+}
+
+interface ThemeBrowseResponse {
+  themes: ThemeItem[];
+}
+
+interface PurchasedThemesResponse {
+  activeThemeId: string | null;
+  themes: ThemeItem[];
+}
+
 export default function ThemeStorePage() {
-  const { store } = useAuthStore();
+  const { store, setStore } = useAuthStore();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"all" | "free" | "installed">("all");
   const [category, setCategory] = useState("الكل");
-  const [preview, setPreview] = useState<any>(null);
-  const [customizing, setCustomizing] = useState<any>(null);
-  const [primaryColor, setPrimaryColor] = useState("#6366f1");
-  const [fontFamily, setFontFamily] = useState("Tajawal");
+  const [preview, setPreview] = useState<ThemeItem | null>(null);
+  const [customizing, setCustomizing] = useState<ThemeItem | null>(null);
+  const [primaryColor, setPrimaryColor] = useState(store?.settings?.primaryColor || "#6366f1");
+  const [fontFamily, setFontFamily] = useState(store?.settings?.fontFamily || "Tajawal");
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading } = useQuery<ThemeBrowseResponse>({
     queryKey: ["themes", search],
     queryFn: async () => {
-      const res = await api.get(`/themes?search=${search}`);
-      return res.data as any;
+      const params = new URLSearchParams();
+      if (search.trim()) params.set("q", search.trim());
+      const res = await api.get(`/themes${params.size ? `?${params.toString()}` : ""}`);
+      return res.data as ThemeBrowseResponse;
     },
   });
 
-  const { data: purchasedData } = useQuery({
+  const { data: purchasedData } = useQuery<PurchasedThemesResponse>({
     queryKey: ["purchased-themes", store?.id],
     queryFn: async () => {
-      const res = await api.get(`/themes/purchased?storeId=${store!.id}`);
-      return res.data as any;
+      const res = await api.get(`/themes/purchased/${store!.id}`);
+      return res.data as PurchasedThemesResponse;
     },
     enabled: !!store?.id,
   });
 
   const purchaseMutation = useMutation({
-    mutationFn: async (themeId: string) => {
-      await api.post("/themes/purchase", { storeId: store!.id, themeId });
+    mutationFn: async (theme: ThemeItem) => {
+      await api.post("/themes/purchase", { storeId: store!.id, themeId: theme.id });
+      const activation = await api.post("/themes/activate", { storeId: store!.id, themeId: theme.id });
+      return activation.data as { store?: typeof store };
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["purchased-themes"] }),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ["purchased-themes"] });
+      if (response.store) setStore(response.store);
+    },
+  });
+
+  const activateMutation = useMutation({
+    mutationFn: async (themeId: string) => {
+      const res = await api.post("/themes/activate", { storeId: store!.id, themeId });
+      return res.data as { store?: typeof store };
+    },
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ["purchased-themes"] });
+      if (response.store) setStore(response.store);
+    },
   });
 
   const applyCustomMutation = useMutation({
     mutationFn: async (payload: { themeId: string; primaryColor: string; fontFamily: string }) => {
-      await api.patch(`/themes/${payload.themeId}/customize`, {
+      const res = await api.patch(`/themes/${payload.themeId}/customize`, {
         storeId: store!.id,
         primaryColor: payload.primaryColor,
         fontFamily: payload.fontFamily,
       });
+      return res.data as { store?: typeof store };
     },
-    onSuccess: () => { setCustomizing(null); queryClient.invalidateQueries({ queryKey: ["purchased-themes"] }); },
+    onSuccess: (response) => {
+      setCustomizing(null);
+      queryClient.invalidateQueries({ queryKey: ["purchased-themes"] });
+      if (response.store) setStore(response.store);
+    },
   });
 
-  const allThemes: any[] = data?.themes || [];
-  const purchasedIds = new Set((purchasedData?.themes || []).map((t: any) => t.themeId));
-  const purchasedThemes: any[] = (purchasedData?.themes || []).map((t: any) => t.theme).filter(Boolean);
+  const rollbackMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post("/themes/rollback", { storeId: store!.id });
+      return res.data as { store?: typeof store };
+    },
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ["purchased-themes"] });
+      if (response.store) setStore(response.store);
+    },
+  });
 
-  const filtered = allThemes.filter((t) => {
-    if (tab === "free" && !t.isFree) return false;
-    if (tab === "installed" && !purchasedIds.has(t.id)) return false;
-    if (category !== "الكل" && t.category !== category) return false;
+  const allThemes = data?.themes || [];
+  const purchasedThemes = purchasedData?.themes || [];
+  const purchasedIds = new Set(purchasedThemes.map((theme) => theme.id));
+  const activeThemeId = purchasedData?.activeThemeId ?? null;
+  const updatesCount = purchasedThemes.filter((theme) => theme.hasUpdateAvailable).length;
+
+  const sourceThemes = tab === "installed" ? purchasedThemes : allThemes;
+  const filtered = sourceThemes.filter((theme) => {
+    if (tab === "free" && theme.isPremium) return false;
+    if (category !== "الكل" && !theme.tags.includes(category)) return false;
     return true;
   });
-
-  const displayList = tab === "installed" && filtered.length === 0 ? purchasedThemes : filtered;
+  const displayList = filtered;
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Header title="متجر القوالب" subtitle="اختر قالباً جميلاً لمتجرك" />
 
       <div className="p-6 space-y-5 max-w-7xl mx-auto w-full">
+        {updatesCount > 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            لديك {updatesCount} قالب يحتاج إلى مزامنة إلى النسخة الأحدث.
+          </div>
+        )}
         {/* Tabs */}
         <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl p-1 w-fit">
           {([["all", "جميع القوالب"], ["free", "مجانية"], ["installed", "مُثبَّتة"]] as const).map(([key, label]) => (
@@ -134,12 +209,13 @@ export default function ThemeStorePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
             {displayList.map((theme: any) => {
               const isPurchased = purchasedIds.has(theme.id);
+              const isActiveTheme = activeThemeId === theme.id;
               return (
                 <div key={theme.id} className="group bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-lg transition-all">
                   {/* Preview image */}
                   <div className="aspect-[4/3] bg-gradient-to-br from-slate-100 to-slate-200 relative overflow-hidden">
-                    {theme.previewImage ? (
-                      <img src={theme.previewImage} alt={theme.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                    {theme.thumbnailUrl ? (
+                      <img src={theme.thumbnailUrl} alt={theme.nameAr || theme.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                     ) : (
                       <div className="flex items-center justify-center h-full">
                         <Palette className="w-10 h-10 text-slate-300" />
@@ -159,23 +235,26 @@ export default function ThemeStorePage() {
                     </div>
                     {/* Badges */}
                     <div className="absolute top-2 right-2 flex flex-col gap-1">
-                      {isPurchased && <span className="rounded-md bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5">مُثبَّت</span>}
-                      {theme.isFree && !isPurchased && <span className="rounded-md bg-blue-500 text-white text-[10px] font-bold px-2 py-0.5">مجاني</span>}
-                      {(theme.isNew || theme.isFeatured) && <span className="rounded-md bg-violet-500 text-white text-[10px] font-bold px-2 py-0.5">جديد</span>}
+                      {isPurchased && <span className="rounded-md bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5">مثبّت</span>}
+                      {!theme.isPremium && !isPurchased && <span className="rounded-md bg-blue-500 text-white text-[10px] font-bold px-2 py-0.5">مجاني</span>}
+                      {isActiveTheme && <span className="rounded-md bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5">نشط</span>}
                     </div>
                   </div>
 
                   <div className="p-4">
                     <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="font-semibold text-slate-800 leading-tight">{theme.name}</h4>
+                      <h4 className="font-semibold text-slate-800 leading-tight">{theme.nameAr || theme.name}</h4>
                       <span className="shrink-0 font-bold text-indigo-600 text-sm">
-                        {theme.isFree ? "مجاني" : formatBHD(Number(theme.price))}
+                        {theme.isPremium ? formatBHD(Number(theme.price)) : "مجاني"}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500 line-clamp-1 mb-2">{theme.description}</p>
+                    <p className="text-xs text-slate-500 line-clamp-1 mb-2">{theme.descriptionAr || theme.description || "قالب جاهز للتفعيل على متجرك"}</p>
 
                     <div className="flex items-center gap-3 text-xs text-slate-400 mb-3">
-                      {theme.rating > 0 && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">
+                        v{theme.availableVersion || "1.0.0"}
+                      </span>
+                      {Number(theme.rating) > 0 && (
                         <span className="flex items-center gap-0.5 text-amber-500">
                           <Star className="w-3 h-3 fill-amber-400" />
                           {Number(theme.rating).toFixed(1)}
@@ -183,35 +262,107 @@ export default function ThemeStorePage() {
                       )}
                       <span className="flex items-center gap-1">
                         <Download className="w-3 h-3" />
-                        {theme.downloadCount || 0}
+                        {theme.installCount || 0}
                       </span>
-                      <span>{theme.category || "عام"}</span>
+                      <span>{theme.tags[0] || "عام"}</span>
                     </div>
+
+                    {isPurchased && (
+                      <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                        <div className="flex items-center justify-between gap-2">
+                          <span>الترخيص: {theme.licenseKey?.slice(0, 8) || "—"}...</span>
+                          {theme.licenseKey && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(theme.licenseKey as string);
+                              }}
+                              className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-800"
+                            >
+                              <Copy className="h-3 w-3" />
+                              نسخ
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-1">المثبت: {theme.installedVersion || theme.availableVersion || "1.0.0"} · المتاح: {theme.availableVersion || "1.0.0"}</div>
+                        {theme.hasUpdateAvailable && (
+                          <div className="mt-1 text-amber-600">
+                            تحديث متاح منذ {theme.latestVersionUpdatedAt ? new Date(theme.latestVersionUpdatedAt).toLocaleDateString("ar-BH") : "وقت قريب"}
+                          </div>
+                        )}
+                        {theme.changelog && (
+                          <div className="mt-2 whitespace-pre-line rounded-lg bg-white px-2 py-1 text-slate-500">
+                            {theme.changelog}
+                          </div>
+                        )}
+                        {isActiveTheme && theme.rollbackThemeId && (
+                          <div className="mt-2 text-slate-500">
+                            يمكن الرجوع إلى القالب السابق إذا سببت النسخة الحالية مشكلة تشغيلية.
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div className="flex gap-2">
                       {isPurchased ? (
                         <>
                           <button
-                            onClick={() => { setCustomizing(theme); setPrimaryColor("#6366f1"); setFontFamily("Tajawal"); }}
+                            onClick={() => {
+                              setCustomizing(theme);
+                              setPrimaryColor(store?.settings?.primaryColor || "#6366f1");
+                              setFontFamily(store?.settings?.fontFamily || "Tajawal");
+                            }}
                             className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
                           >
                             <Settings className="h-3.5 w-3.5" />
                             تخصيص
                           </button>
-                          <span className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-50 text-emerald-700 py-2 text-xs font-bold">
-                            <CheckCircle className="h-3.5 w-3.5" />
-                            مُثبَّت
-                          </span>
+                          {isActiveTheme && theme.rollbackThemeId ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="w-full rounded-xl"
+                              disabled={rollbackMutation.isPending}
+                              onClick={() => rollbackMutation.mutate()}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5 ml-1" />
+                              رجوع
+                            </Button>
+                          ) : null}
+                          {theme.hasUpdateAvailable ? (
+                            <Button
+                              size="sm"
+                              className="w-full bg-amber-500 hover:bg-amber-600 text-white rounded-xl"
+                              disabled={activateMutation.isPending}
+                              onClick={() => activateMutation.mutate(theme.id)}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5 ml-1" />
+                              مزامنة
+                            </Button>
+                          ) : isActiveTheme ? (
+                            <span className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-50 text-emerald-700 py-2 text-xs font-bold">
+                              <CheckCircle className="h-3.5 w-3.5" />
+                              مفعّل
+                            </span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              className="w-full bg-slate-900 hover:bg-slate-800 text-white rounded-xl"
+                              disabled={activateMutation.isPending}
+                              onClick={() => activateMutation.mutate(theme.id)}
+                            >
+                              تفعيل
+                            </Button>
+                          )}
                         </>
                       ) : (
                         <Button
                           size="sm"
                           className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl"
                           disabled={purchaseMutation.isPending}
-                          onClick={() => purchaseMutation.mutate(theme.id)}
+                          onClick={() => purchaseMutation.mutate(theme)}
                         >
                           <Sparkles className="h-3.5 w-3.5 ml-1" />
-                          {theme.isFree ? "تثبيت مجاناً" : "شراء وتثبيت"}
+                          {theme.isPremium ? "شراء وتفعيل" : "تثبيت وتفعيل"}
                         </Button>
                       )}
                     </div>
@@ -236,23 +387,26 @@ export default function ThemeStorePage() {
             <div className="h-[60vh]">
               {preview.demoUrl ? (
                 <iframe src={preview.demoUrl} className="w-full h-full border-0" title={preview.name} sandbox="allow-scripts allow-same-origin" />
-              ) : preview.previewImage ? (
-                <img src={preview.previewImage} alt={preview.name} className="w-full h-full object-contain" />
+              ) : preview.thumbnailUrl ? (
+                <img src={preview.thumbnailUrl} alt={preview.nameAr || preview.name} className="w-full h-full object-contain" />
               ) : (
                 <div className="flex items-center justify-center h-full text-slate-400">لا تتوفر معاينة</div>
               )}
             </div>
             <div className="flex items-center justify-between px-5 py-3 border-t border-slate-200 bg-slate-50">
-              <span className="text-sm font-bold text-indigo-600">{preview.isFree ? "مجاني" : formatBHD(Number(preview.price))}</span>
+              <span className="text-sm font-bold text-indigo-600">{preview.isPremium ? formatBHD(Number(preview.price)) : "مجاني"}</span>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => setPreview(null)}>إغلاق</Button>
                 <Button
                   size="sm"
                   className="bg-indigo-600 hover:bg-indigo-700 text-white"
                   disabled={purchasedIds.has(preview.id) || purchaseMutation.isPending}
-                  onClick={() => { if (!purchasedIds.has(preview.id)) purchaseMutation.mutate(preview.id); setPreview(null); }}
+                  onClick={() => {
+                    if (!purchasedIds.has(preview.id)) purchaseMutation.mutate(preview);
+                    setPreview(null);
+                  }}
                 >
-                  {purchasedIds.has(preview.id) ? "مُثبَّت بالفعل" : preview.isFree ? "تثبيت مجاناً" : "شراء وتثبيت"}
+                  {purchasedIds.has(preview.id) ? "مثبّت بالفعل" : preview.isPremium ? "شراء وتفعيل" : "تثبيت وتفعيل"}
                 </Button>
               </div>
             </div>

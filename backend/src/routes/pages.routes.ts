@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { PageType } from '@prisma/client'
+import { findMerchantPage, findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 const PAGE_TYPE_DEFAULTS: Record<string, { title: string; titleAr: string }> = {
@@ -22,7 +23,7 @@ export async function pagesRoutes(app: FastifyInstance) {
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
     const merchantId = (request.user as any).id
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const pages = await prisma.page.findMany({
@@ -39,11 +40,10 @@ export async function pagesRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const page = await prisma.page.findUnique({ where: { id } })
-    if (!page) return reply.status(404).send({ error: 'الصفحة غير موجودة' })
+    const ownedPage = await findMerchantPage(merchantId, id)
+    if (!ownedPage) return reply.status(404).send({ error: 'الصفحة غير موجودة' })
 
-    const store = await prisma.store.findFirst({ where: { id: page.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+    const page = await prisma.page.findUnique({ where: { id } })
 
     return reply.send({ page })
   })
@@ -69,7 +69,7 @@ export async function pagesRoutes(app: FastifyInstance) {
     const merchantId = (request.user as any).id
     const { storeId, ...data } = result.data
 
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const exists = await prisma.page.findUnique({ where: { storeId_slug: { storeId, slug: data.slug } } })
@@ -96,11 +96,8 @@ export async function pagesRoutes(app: FastifyInstance) {
     if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
     const merchantId = (request.user as any).id
-    const existing = await prisma.page.findUnique({ where: { id } })
+    const existing = await findMerchantPage(merchantId, id)
     if (!existing) return reply.status(404).send({ error: 'الصفحة غير موجودة' })
-
-    const store = await prisma.store.findFirst({ where: { id: existing.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const page = await prisma.page.update({ where: { id }, data: result.data })
     return reply.send({ page })
@@ -111,11 +108,8 @@ export async function pagesRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const existing = await prisma.page.findUnique({ where: { id } })
+    const existing = await findMerchantPage(merchantId, id)
     if (!existing) return reply.status(404).send({ error: 'الصفحة غير موجودة' })
-
-    const store = await prisma.store.findFirst({ where: { id: existing.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     await prisma.page.delete({ where: { id } })
     return reply.send({ message: 'تم حذف الصفحة' })

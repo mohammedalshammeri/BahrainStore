@@ -1,4 +1,5 @@
 import { CheckCircle2, AlertCircle, AlertTriangle, Clock, Info } from "lucide-react";
+import { getPublicApiUrl } from "@/lib/env";
 
 interface IncidentUpdate { message: string; createdAt: string }
 interface PlatformIncident {
@@ -18,7 +19,7 @@ interface StatusData {
   generatedAt: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api";
+const API_URL = getPublicApiUrl();
 
 async function getStatus(): Promise<StatusData> {
   try {

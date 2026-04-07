@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { findMerchantStore } from '../lib/merchant-ownership'
 import { sendAbandonedCartEmail } from '../lib/email'
+import { authenticate } from '../middleware/auth.middleware'
 
 const saveCartSchema = z.object({
   storeId: z.string().cuid(),
@@ -20,6 +22,27 @@ const saveCartSchema = z.object({
 })
 
 export async function cartRoutes(app: FastifyInstance) {
+  async function ensureOwnedStore(request: any, reply: any, storeId: string) {
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+
+    if (!store) {
+      reply.status(403).send({ error: 'غير مصرح' })
+      return null
+    }
+
+    return store
+  }
+
+  async function findOwnedCart(request: any, cartId: string) {
+    const merchantId = (request.user as any).id
+
+    return prisma.abandonedCart.findFirst({
+      where: { id: cartId, store: { merchantId } },
+      select: { id: true, storeId: true },
+    })
+  }
+
   // ── Save abandoned cart ───────────────────────
   app.post('/save', async (request, reply) => {
     const result = saveCartSchema.safeParse(request.body)
@@ -53,25 +76,31 @@ export async function cartRoutes(app: FastifyInstance) {
   })
 
   // ── Mark cart as recovered ────────────────────
-  app.patch('/recover/:id', async (request, reply) => {
+  app.patch('/recover/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string }
+    const cart = await findOwnedCart(request, id)
+    if (!cart) return reply.status(404).send({ error: 'السلة غير موجودة' })
+
     await prisma.abandonedCart.update({
-      where: { id },
+      where: { id: cart.id },
       data: { recoveredAt: new Date() },
     })
     return reply.send({ ok: true })
   })
 
   // ── Send reminders for unrecovered carts ─────
-  // This endpoint is meant to be called by a cron job / external scheduler
-  app.post('/send-reminders', async (request, reply) => {
+  app.post('/send-reminders', { preHandler: authenticate }, async (request, reply) => {
     const { storeId, hoursOld = 3 } = request.body as { storeId?: string; hoursOld?: number }
+    if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
+
+    const store = await ensureOwnedStore(request, reply, storeId)
+    if (!store) return
 
     const since = new Date(Date.now() - hoursOld * 3600 * 1000)
 
     const carts = await prisma.abandonedCart.findMany({
       where: {
-        ...(storeId ? { storeId } : {}),
+        storeId: store.id,
         reminderSent: false,
         recoveredAt: null,
         updatedAt: { lt: since },
@@ -104,10 +133,13 @@ export async function cartRoutes(app: FastifyInstance) {
   })
 
   // ── List abandoned carts (merchant) ──────────
-  app.get('/:storeId', async (request, reply) => {
+  app.get('/:storeId', { preHandler: authenticate }, async (request, reply) => {
     const { storeId } = request.params as { storeId: string }
+    const store = await ensureOwnedStore(request, reply, storeId)
+    if (!store) return
+
     const carts = await prisma.abandonedCart.findMany({
-      where: { storeId, recoveredAt: null },
+      where: { storeId: store.id, recoveredAt: null },
       orderBy: { updatedAt: 'desc' },
       take: 100,
     })

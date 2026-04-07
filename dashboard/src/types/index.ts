@@ -6,6 +6,22 @@ export interface Merchant {
   phone: string | null;
   avatar: string | null;
   isAdmin?: boolean;
+  platformAccess?: {
+    isFullAdmin: boolean;
+    staffId: string | null;
+    permissions: {
+      canViewMerchants: boolean;
+      canDisableStore: boolean;
+      canReplyTickets: boolean;
+      canEditPlans: boolean;
+      canManageApps: boolean;
+      canViewFinancials: boolean;
+      canViewAuditLog: boolean;
+      canManageContent: boolean;
+      canReviewKYC: boolean;
+      canManageTeam: boolean;
+    };
+  } | null;
   createdAt: string;
   twoFactorEnabled?: boolean;
 }

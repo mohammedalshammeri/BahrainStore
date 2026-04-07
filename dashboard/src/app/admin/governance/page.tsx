@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/store/auth.store";
 import {
   Shield, FileText, Ban, CheckCircle2, XCircle,
   Clock, RefreshCw, Plus, Trash2, Eye, Save,
@@ -21,6 +22,8 @@ interface KycDoc {
   reviewNote: string | null;
   reviewedAt: string | null;
   reviewedBy: string | null;
+  expiresAt: string | null;
+  reVerifyBy: string | null;
   createdAt: string;
   merchant: { id: string; email: string; firstName: string; lastName: string; kycStatus: string };
 }
@@ -30,6 +33,20 @@ interface KycStats {
   approved: number;
   rejected: number;
   total: number;
+}
+
+interface KycListResponse {
+  docs: KycDoc[];
+  total: number;
+  page: number;
+  pages: number;
+}
+
+interface MerchantOption {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
 }
 
 interface BlacklistItem {
@@ -106,17 +123,40 @@ function Badge({ status, map }: { status: string; map: Record<string, { color: s
 function KycTab() {
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("PENDING");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [reviewModal, setReviewModal] = useState<KycDoc | null>(null);
   const [reviewNote, setReviewNote] = useState("");
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [merchantSearch, setMerchantSearch] = useState("");
+  const [createForm, setCreateForm] = useState({ merchantId: "", type: "NATIONAL_ID", fileUrl: "", fileName: "" });
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, typeFilter, search]);
 
   const { data: stats } = useQuery<KycStats>({
     queryKey: ["admin", "kyc", "stats"],
     queryFn: () => api.get("/admin/kyc/stats").then((r) => r.data),
   });
 
-  const { data, isLoading, refetch } = useQuery<{ docs: KycDoc[]; total: number }>({
-    queryKey: ["admin", "kyc", { status: statusFilter }],
-    queryFn: () => api.get(`/admin/kyc?status=${statusFilter}`).then((r) => r.data),
+  const { data, isLoading, refetch } = useQuery<KycListResponse>({
+    queryKey: ["admin", "kyc", { status: statusFilter, type: typeFilter, search, page }],
+    queryFn: () => api.get("/admin/kyc", {
+      params: {
+        status: statusFilter,
+        type: typeFilter || undefined,
+        search: search || undefined,
+        page,
+      },
+    }).then((r) => r.data),
+  });
+
+  const { data: merchantOptions, isLoading: merchantsLoading } = useQuery<{ merchants: MerchantOption[] }>({
+    queryKey: ["admin", "merchants", merchantSearch],
+    queryFn: () => api.get(`/admin/kyc/merchants?limit=20&search=${encodeURIComponent(merchantSearch)}`).then((r) => r.data),
+    enabled: showCreateForm,
   });
 
   const reviewMut = useMutation({
@@ -124,13 +164,130 @@ function KycTab() {
       api.patch(`/admin/kyc/${vars.id}/review`, { status: vars.status, reviewNote: vars.reviewNote }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "kyc"] });
+      qc.invalidateQueries({ queryKey: ["admin", "kyc", "stats"] });
       setReviewModal(null);
       setReviewNote("");
     },
   });
 
+  const createMut = useMutation({
+    mutationFn: () => api.post("/admin/kyc", createForm),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "kyc"] });
+      qc.invalidateQueries({ queryKey: ["admin", "kyc", "stats"] });
+      setShowCreateForm(false);
+      setMerchantSearch("");
+      setCreateForm({ merchantId: "", type: "NATIONAL_ID", fileUrl: "", fileName: "" });
+    },
+  });
+
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-white font-semibold">مراجعات KYC</h3>
+          <p className="text-slate-400 text-sm">مراجعة الوثائق الحالية أو إضافة وثيقة يدوياً لتاجر محدد.</p>
+        </div>
+        <button
+          onClick={() => setShowCreateForm((prev) => !prev)}
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white"
+          style={{ background: showCreateForm ? "#334155" : "#2563eb" }}
+        >
+          <Plus size={14} />
+          {showCreateForm ? "إغلاق النموذج" : "إضافة وثيقة KYC"}
+        </button>
+      </div>
+
+      {showCreateForm && (
+        <div className="rounded-xl p-4 space-y-4" style={SURFACE}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-400 mb-2">بحث عن التاجر</label>
+              <input
+                value={merchantSearch}
+                onChange={(e) => setMerchantSearch(e.target.value)}
+                placeholder="الاسم أو البريد الإلكتروني"
+                className="w-full px-3 py-2 rounded-lg text-sm text-white"
+                style={{ background: "#131e30", border: "1px solid #1a2840" }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-2">التاجر</label>
+              <select
+                value={createForm.merchantId}
+                onChange={(e) => setCreateForm((prev) => ({ ...prev, merchantId: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg text-sm text-white"
+                style={{ background: "#131e30", border: "1px solid #1a2840" }}
+              >
+                <option value="">اختر تاجراً</option>
+                {(merchantOptions?.merchants ?? []).map((merchant) => (
+                  <option key={merchant.id} value={merchant.id}>
+                    {merchant.firstName} {merchant.lastName} — {merchant.email}
+                  </option>
+                ))}
+              </select>
+              {merchantsLoading && <p className="text-xs text-slate-500 mt-2">جارٍ تحميل التجار...</p>}
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-2">نوع الوثيقة</label>
+              <select
+                value={createForm.type}
+                onChange={(e) => setCreateForm((prev) => ({ ...prev, type: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg text-sm text-white"
+                style={{ background: "#131e30", border: "1px solid #1a2840" }}
+              >
+                {Object.entries(DOC_TYPE_LABEL).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-2">اسم الملف</label>
+              <input
+                value={createForm.fileName}
+                onChange={(e) => setCreateForm((prev) => ({ ...prev, fileName: e.target.value }))}
+                placeholder="اختياري"
+                className="w-full px-3 py-2 rounded-lg text-sm text-white"
+                style={{ background: "#131e30", border: "1px solid #1a2840" }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-2">رابط الملف</label>
+            <input
+              value={createForm.fileUrl}
+              onChange={(e) => setCreateForm((prev) => ({ ...prev, fileUrl: e.target.value }))}
+              placeholder="https://..."
+              className="w-full px-3 py-2 rounded-lg text-sm text-white"
+              style={{ background: "#131e30", border: "1px solid #1a2840" }}
+            />
+          </div>
+
+          <div className="flex items-center gap-3 justify-end">
+            <button
+              onClick={() => {
+                setShowCreateForm(false);
+                setMerchantSearch("");
+                setCreateForm({ merchantId: "", type: "NATIONAL_ID", fileUrl: "", fileName: "" });
+              }}
+              className="px-4 py-2 rounded-lg text-sm text-slate-300"
+              style={{ background: "#131e30" }}
+            >
+              إلغاء
+            </button>
+            <button
+              onClick={() => createMut.mutate()}
+              disabled={!createForm.merchantId || !createForm.fileUrl || createMut.isPending}
+              className="px-4 py-2 rounded-lg text-sm text-white"
+              style={{ background: "#2563eb", opacity: (!createForm.merchantId || !createForm.fileUrl || createMut.isPending) ? 0.6 : 1 }}
+            >
+              {createMut.isPending ? "جارٍ الإضافة..." : "حفظ الوثيقة"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
@@ -162,6 +319,24 @@ function KycTab() {
             {KYC_STATUS_STYLE[s]?.label}
           </button>
         ))}
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="px-3 py-1.5 text-xs rounded-lg text-slate-200"
+          style={{ background: "#131e30", border: "1px solid #1a2840" }}
+        >
+          <option value="">كل الأنواع</option>
+          {Object.entries(DOC_TYPE_LABEL).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="بحث باسم التاجر أو البريد"
+          className="px-3 py-1.5 text-xs rounded-lg text-white min-w-[220px]"
+          style={{ background: "#131e30", border: "1px solid #1a2840" }}
+        />
         <button onClick={() => refetch()} className="mr-auto p-1.5 rounded text-slate-500" style={{ background: "#131e30" }}>
           <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
         </button>
@@ -174,6 +349,7 @@ function KycTab() {
             <tr style={{ borderBottom: "1px solid #1a2840", color: "#64748b" }}>
               <th className="text-right py-3 px-4">التاجر</th>
               <th className="text-right py-3 px-4">نوع الوثيقة</th>
+              <th className="text-right py-3 px-4">حالة الوثيقة</th>
               <th className="text-right py-3 px-4">حالة KYC</th>
               <th className="text-right py-3 px-4">تاريخ الرفع</th>
               <th className="text-right py-3 px-4">الإجراء</th>
@@ -181,10 +357,10 @@ function KycTab() {
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={5} className="text-center py-8 text-slate-500">جارٍ التحميل...</td></tr>
+              <tr><td colSpan={6} className="text-center py-8 text-slate-500">جارٍ التحميل...</td></tr>
             )}
             {!isLoading && (data?.docs ?? []).length === 0 && (
-              <tr><td colSpan={5} className="text-center py-8 text-slate-500">لا توجد وثائق بهذه الحالة</td></tr>
+              <tr><td colSpan={6} className="text-center py-8 text-slate-500">لا توجد وثائق بهذه الحالة</td></tr>
             )}
             {(data?.docs ?? []).map((doc) => (
               <tr key={doc.id} style={{ borderBottom: "1px solid #1a284044" }}>
@@ -194,28 +370,42 @@ function KycTab() {
                 </td>
                 <td className="py-3 px-4 text-slate-300">{DOC_TYPE_LABEL[doc.type] ?? doc.type}</td>
                 <td className="py-3 px-4">
+                  <Badge status={doc.status} map={KYC_STATUS_STYLE} />
+                </td>
+                <td className="py-3 px-4">
                   <Badge status={doc.merchant.kycStatus} map={KYC_STATUS_STYLE} />
                 </td>
                 <td className="py-3 px-4 text-slate-400 text-xs">{fmtDate(doc.createdAt)}</td>
                 <td className="py-3 px-4">
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={doc.fileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-1.5 rounded text-blue-400"
-                      style={{ background: "rgba(59,130,246,.12)" }}
-                    >
-                      <Eye size={13} />
-                    </a>
-                    {doc.status === "PENDING" && (
-                      <button
-                        onClick={() => { setReviewModal(doc); setReviewNote(""); }}
-                        className="px-3 py-1 rounded text-xs text-white"
-                        style={{ background: "#1e3a5f" }}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={doc.fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1.5 rounded text-blue-400"
+                        style={{ background: "rgba(59,130,246,.12)" }}
                       >
-                        مراجعة
-                      </button>
+                        <Eye size={13} />
+                      </a>
+                      {doc.status === "PENDING" && (
+                        <button
+                          onClick={() => { setReviewModal(doc); setReviewNote(""); }}
+                          className="px-3 py-1 rounded text-xs text-white"
+                          style={{ background: "#1e3a5f" }}
+                        >
+                          مراجعة
+                        </button>
+                      )}
+                    </div>
+                    {(doc.reviewNote || doc.reviewedAt) && (
+                      <div className="text-xs text-slate-400 space-y-1">
+                        {doc.reviewNote && <p>ملاحظة: {doc.reviewNote}</p>}
+                        {doc.reviewedAt && <p>تمت المراجعة: {fmtDate(doc.reviewedAt)}</p>}
+                        {doc.reviewedBy && <p>بواسطة: {doc.reviewedBy}</p>}
+                        {doc.expiresAt && <p>تنتهي الصلاحية: {fmtDate(doc.expiresAt)}</p>}
+                        {doc.reVerifyBy && <p>إعادة التحقق مطلوبة قبل: {fmtDate(doc.reVerifyBy)}</p>}
+                      </div>
                     )}
                   </div>
                 </td>
@@ -223,6 +413,32 @@ function KycTab() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
+        <span>إجمالي النتائج: {data?.total ?? 0}</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+            disabled={page <= 1}
+            className="px-3 py-1.5 rounded-lg"
+            style={{ background: "#131e30", opacity: page <= 1 ? 0.5 : 1 }}
+          >
+            السابق
+          </button>
+          <span>صفحة {data?.page ?? page} من {Math.max(1, data?.pages ?? 1)}</span>
+          <button
+            onClick={() => setPage((prev) => {
+              const maxPage = Math.max(1, data?.pages ?? 1);
+              return prev >= maxPage ? prev : prev + 1;
+            })}
+            disabled={page >= Math.max(1, data?.pages ?? 1)}
+            className="px-3 py-1.5 rounded-lg"
+            style={{ background: "#131e30", opacity: page >= Math.max(1, data?.pages ?? 1) ? 0.5 : 1 }}
+          >
+            التالي
+          </button>
+        </div>
       </div>
 
       {/* Review Modal */}
@@ -253,9 +469,9 @@ function KycTab() {
               </button>
               <button
                 onClick={() => reviewMut.mutate({ id: reviewModal.id, status: "REJECTED", reviewNote })}
-                disabled={reviewMut.isPending}
+                disabled={reviewMut.isPending || !reviewNote.trim()}
                 className="flex-1 py-2 rounded-lg text-sm font-medium text-white"
-                style={{ background: "#dc2626" }}
+                style={{ background: reviewNote.trim() ? "#dc2626" : "#7f1d1d", opacity: reviewNote.trim() ? 1 : 0.65 }}
               >
                 <XCircle size={14} className="inline ml-1" />
                 رفض
@@ -733,7 +949,18 @@ const TABS = [
 ];
 
 export default function GovernancePage() {
+  const { merchant } = useAuthStore();
   const [tab, setTab] = useState("kyc");
+  const platformAccess = (merchant as any)?.platformAccess ?? null;
+  const visibleTabs = platformAccess?.isFullAdmin
+    ? TABS
+    : TABS.filter((tabEntry) => tabEntry.key === "kyc" && platformAccess?.permissions?.canReviewKYC);
+
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.some((entry) => entry.key === tab)) {
+      setTab(visibleTabs[0].key);
+    }
+  }, [tab, visibleTabs]);
 
   return (
     <div className="min-h-screen p-6" style={PAGE_BG}>
@@ -745,7 +972,7 @@ export default function GovernancePage() {
 
       {/* Tab Navigation */}
       <div className="flex gap-2 mb-6 flex-wrap">
-        {TABS.map((t) => {
+        {visibleTabs.map((t) => {
           const Icon = t.icon;
           return (
             <button
@@ -767,9 +994,9 @@ export default function GovernancePage() {
 
       {/* Tab Content */}
       {tab === "kyc"        && <KycTab />}
-      {tab === "blacklist"  && <BlacklistTab />}
-      {tab === "legal"      && <LegalTab />}
-      {tab === "compliance" && <ComplianceTab />}
+      {platformAccess?.isFullAdmin && tab === "blacklist"  && <BlacklistTab />}
+      {platformAccess?.isFullAdmin && tab === "legal"      && <LegalTab />}
+      {platformAccess?.isFullAdmin && tab === "compliance" && <ComplianceTab />}
     </div>
   );
 }

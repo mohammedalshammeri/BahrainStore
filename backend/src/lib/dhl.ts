@@ -45,13 +45,26 @@ export interface DhlShipmentResult {
   error?: string
 }
 
+export interface DhlTrackingResult {
+  success: boolean
+  status?: string
+  description?: string
+  checkedAt?: string
+  raw?: unknown
+  error?: string
+}
+
+function getDhlBaseUrl(config: DhlConfig) {
+  return config.environment === 'sandbox'
+    ? 'https://express.api.dhl.com/mydhlapi/test'
+    : 'https://express.api.dhl.com/mydhlapi'
+}
+
 export async function createDhlShipment(
   params: DhlShipmentParams,
   config: DhlConfig
 ): Promise<DhlShipmentResult> {
-  const baseUrl = config.environment === 'sandbox'
-    ? 'https://express.api.dhl.com/mydhlapi/test'
-    : 'https://express.api.dhl.com/mydhlapi'
+  const baseUrl = getDhlBaseUrl(config)
 
   const shipDate = new Date().toISOString().split('T')[0] + 'T10:00:00 GMT+0300'
 
@@ -136,5 +149,68 @@ export async function createDhlShipment(
   } catch (err) {
     console.error('[DHL] Network error:', err)
     return { shipmentTrackingNumber: '', success: false, error: 'Network error' }
+  }
+}
+
+export async function trackDhlShipment(
+  trackingNumber: string,
+  config: DhlConfig
+): Promise<DhlTrackingResult> {
+  const baseUrl = getDhlBaseUrl(config)
+
+  try {
+    const res = await fetch(`${baseUrl}/shipments/${encodeURIComponent(trackingNumber)}/tracking`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'DHL-API-Key': config.apiKey,
+      },
+    })
+
+    if (!res.ok) {
+      const text = await res.text()
+      console.error('[DHL tracking]', text)
+      return { success: false, error: 'DHL tracking API error' }
+    }
+
+    const data = await res.json() as any
+    const shipment = Array.isArray(data?.shipments) ? data.shipments[0] : data?.shipments
+    const events = Array.isArray(shipment?.events)
+      ? shipment.events
+      : Array.isArray(shipment?.checkpoints)
+        ? shipment.checkpoints
+        : Array.isArray(data?.events)
+          ? data.events
+          : []
+    const latestEvent = events[0]
+
+    const status = shipment?.status?.statusCode
+      ?? shipment?.status?.status
+      ?? shipment?.status
+      ?? latestEvent?.statusCode
+      ?? latestEvent?.status
+      ?? latestEvent?.description
+      ?? 'IN_TRANSIT'
+
+    const description = latestEvent?.description
+      ?? latestEvent?.status
+      ?? shipment?.status?.description
+      ?? shipment?.status?.statusText
+      ?? 'Shipment is in progress'
+
+    const checkedAt = latestEvent?.timestamp
+      ?? latestEvent?.date
+      ?? new Date().toISOString()
+
+    return {
+      success: true,
+      status: String(status),
+      description: String(description),
+      checkedAt: String(checkedAt),
+      raw: data,
+    }
+  } catch (err) {
+    console.error('[DHL tracking] Network error:', err)
+    return { success: false, error: 'Network error' }
   }
 }

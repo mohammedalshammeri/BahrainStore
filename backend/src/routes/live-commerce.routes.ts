@@ -1,10 +1,57 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { findMerchantLiveChatMessage, findMerchantLiveChatSession, findMerchantLiveStream, findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 import crypto from 'node:crypto'
 
 // ─── Live Commerce (البث المباشر) Routes ──────────────────────────────────────
+
+const LIVE_VIEWER_TTL_MS = 45 * 1000
+const liveViewerPresence = new Map<string, Map<string, number>>()
+
+function getPresenceBucket(streamId: string) {
+  let bucket = liveViewerPresence.get(streamId)
+  if (!bucket) {
+    bucket = new Map<string, number>()
+    liveViewerPresence.set(streamId, bucket)
+  }
+  return bucket
+}
+
+function sweepViewers(streamId: string) {
+  const bucket = liveViewerPresence.get(streamId)
+  if (!bucket) return 0
+
+  const cutoff = Date.now() - LIVE_VIEWER_TTL_MS
+  for (const [viewerId, timestamp] of bucket.entries()) {
+    if (timestamp < cutoff) bucket.delete(viewerId)
+  }
+
+  if (bucket.size === 0) {
+    liveViewerPresence.delete(streamId)
+    return 0
+  }
+
+  return bucket.size
+}
+
+function registerViewerHeartbeat(streamId: string, viewerId: string) {
+  const bucket = getPresenceBucket(streamId)
+  bucket.set(viewerId, Date.now())
+  return sweepViewers(streamId)
+}
+
+function clearViewerPresence(streamId: string) {
+  liveViewerPresence.delete(streamId)
+}
+
+function attachLiveViewerCount<T extends { id: string; status: string; viewerCount: number }>(stream: T) {
+  return {
+    ...stream,
+    viewerCount: stream.status === 'LIVE' ? sweepViewers(stream.id) : stream.viewerCount,
+  }
+}
 
 function getPlatformHint(platform: string): string {
   switch (platform) {
@@ -41,8 +88,12 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
     const merchantId = (request.user as any).id
     const { storeId, embedUrl, platform, ...data } = result.data
 
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    if ((platform === 'YOUTUBE' || platform === 'TIKTOK') && !embedUrl) {
+      return reply.status(400).send({ error: 'embedUrl مطلوب لمنصات YouTube و TikTok' })
+    }
 
     const streamKey = crypto.randomBytes(16).toString('hex')
 
@@ -76,7 +127,7 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
     const { storeId } = request.query as { storeId: string }
     const merchantId = (request.user as any).id
 
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const streams = await prisma.liveStream.findMany({
@@ -87,7 +138,46 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
       orderBy: { createdAt: 'desc' },
     })
 
-    return reply.send({ streams })
+    return reply.send({ streams: streams.map((stream) => attachLiveViewerCount(stream)) })
+  })
+
+  app.get('/streams/:id', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
+
+    const ownedStream = await findMerchantLiveStream(merchantId, id)
+    if (!ownedStream) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const stream = await prisma.liveStream.findUnique({
+      where: { id },
+      include: {
+        products: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                nameAr: true,
+                price: true,
+                stock: true,
+                images: { take: 1, select: { url: true } },
+              },
+            },
+          },
+          orderBy: { addedAt: 'asc' },
+        },
+        chatMessages: {
+          where: { isHidden: false },
+          orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
+          take: 25,
+        },
+        _count: { select: { products: true, chatMessages: true } },
+      },
+    })
+
+    if (!stream) return reply.status(404).send({ error: 'البث غير موجود' })
+
+    return reply.send({ stream: attachLiveViewerCount(stream) })
   })
 
   // GET /live-commerce/streams/public/:storeSlug — Public streams for storefront
@@ -104,7 +194,7 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
       orderBy: { scheduledAt: 'asc' },
     })
 
-    return reply.send({ streams })
+    return reply.send({ streams: streams.map((stream) => attachLiveViewerCount(stream)) })
   })
 
   // PATCH /live-commerce/streams/:id/start — Start stream
@@ -112,13 +202,18 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const stream = await prisma.liveStream.findFirst({
-      where: { id },
-      include: { store: true },
-    })
-    if (!stream || stream.store.merchantId !== merchantId) return reply.status(403).send({ error: 'غير مصرح' })
+    const stream = await findMerchantLiveStream(merchantId, id)
+    if (!stream) return reply.status(403).send({ error: 'غير مصرح' })
 
-    await prisma.liveStream.update({ where: { id }, data: { status: 'LIVE', startedAt: new Date() } })
+    const activeStream = await prisma.liveStream.findFirst({
+      where: { storeId: stream.storeId, status: 'LIVE', NOT: { id } },
+      select: { id: true, title: true },
+    })
+    if (activeStream) {
+      return reply.status(409).send({ error: `يوجد بث مباشر آخر يعمل حالياً: ${activeStream.title}` })
+    }
+
+    await prisma.liveStream.update({ where: { id }, data: { status: 'LIVE', startedAt: new Date(), endedAt: null } })
     return reply.send({ message: 'بدأ البث المباشر 🔴' })
   })
 
@@ -127,13 +222,11 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const stream = await prisma.liveStream.findFirst({
-      where: { id },
-      include: { store: true },
-    })
-    if (!stream || stream.store.merchantId !== merchantId) return reply.status(403).send({ error: 'غير مصرح' })
+    const stream = await findMerchantLiveStream(merchantId, id)
+    if (!stream) return reply.status(403).send({ error: 'غير مصرح' })
 
-    await prisma.liveStream.update({ where: { id }, data: { status: 'ENDED', endedAt: new Date() } })
+    clearViewerPresence(id)
+    await prisma.liveStream.update({ where: { id }, data: { status: 'ENDED', endedAt: new Date(), viewerCount: 0 } })
     return reply.send({ message: 'انتهى البث المباشر' })
   })
 
@@ -142,9 +235,12 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const { productId } = request.body as { productId: string }
 
-    const stream = await prisma.liveStream.findUnique({ where: { id }, include: { store: true } })
     const merchantId = (request.user as any).id
-    if (!stream || stream.store.merchantId !== merchantId) return reply.status(403).send({ error: 'غير مصرح' })
+    const stream = await findMerchantLiveStream(merchantId, id)
+    if (!stream) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const product = await prisma.product.findFirst({ where: { id: productId, storeId: stream.storeId }, select: { id: true } })
+    if (!product) return reply.status(403).send({ error: 'المنتج لا يخص هذا المتجر' })
 
     const item = await prisma.liveStreamProduct.upsert({
       where: { streamId_productId: { streamId: id, productId } },
@@ -158,6 +254,11 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
   // DELETE /live-commerce/streams/:id/products/:productId — Remove product
   app.delete('/streams/:id/products/:productId', { preHandler: authenticate }, async (request, reply) => {
     const { id, productId } = request.params as { id: string; productId: string }
+    const merchantId = (request.user as any).id
+
+    const stream = await findMerchantLiveStream(merchantId, id)
+    if (!stream) return reply.status(403).send({ error: 'غير مصرح' })
+
     await prisma.liveStreamProduct.deleteMany({ where: { streamId: id, productId } })
     return reply.send({ message: 'تم إزالة المنتج من البث' })
   })
@@ -179,10 +280,26 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
       data: { streamId: id, senderName, senderId, message },
     })
 
-    // Update viewer count
-    await prisma.liveStream.update({ where: { id }, data: { viewerCount: { increment: 1 } } })
-
     return reply.status(201).send({ msg })
+  })
+
+  app.post('/streams/:id/viewers/heartbeat', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const schema = z.object({ viewerId: z.string().min(4).max(80) })
+    const parsed = schema.safeParse(request.body)
+    if (!parsed.success) return reply.status(400).send({ error: 'viewerId مطلوب' })
+
+    const stream = await prisma.liveStream.findFirst({
+      where: { id, status: 'LIVE' },
+      select: { id: true, peakViewers: true },
+    })
+    if (!stream) return reply.status(400).send({ error: 'البث غير متاح حالياً' })
+
+    const viewerCount = registerViewerHeartbeat(id, parsed.data.viewerId)
+    const peakViewers = Math.max(stream.peakViewers, viewerCount)
+
+    await prisma.liveStream.update({ where: { id }, data: { viewerCount, peakViewers } })
+    return reply.send({ viewerCount, peakViewers })
   })
 
   // GET /live-commerce/streams/:id/chat — Get recent chat messages
@@ -205,8 +322,30 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
   // DELETE /live-commerce/chat/:msgId — Hide message (mod action)
   app.delete('/chat/:msgId', { preHandler: authenticate }, async (request, reply) => {
     const { msgId } = request.params as { msgId: string }
+    const merchantId = (request.user as any).id
+
+    const message = await findMerchantLiveChatMessage(merchantId, msgId)
+    if (!message) return reply.status(403).send({ error: 'غير مصرح' })
+
     await prisma.liveChatMessage.update({ where: { id: msgId }, data: { isHidden: true } })
     return reply.send({ message: 'تم إخفاء الرسالة' })
+  })
+
+  app.patch('/chat/:msgId/pin', { preHandler: authenticate }, async (request, reply) => {
+    const { msgId } = request.params as { msgId: string }
+    const schema = z.object({ pinned: z.boolean().default(true) })
+    const parsed = schema.safeParse(request.body)
+    if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
+
+    const merchantId = (request.user as any).id
+    const message = await findMerchantLiveChatMessage(merchantId, msgId)
+    if (!message) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const updated = await prisma.liveChatMessage.update({
+      where: { id: msgId },
+      data: { isPinned: parsed.data.pinned },
+    })
+    return reply.send({ message: 'تم تحديث تثبيت الرسالة', chatMessage: updated })
   })
 }
 
@@ -262,13 +401,33 @@ export async function liveChatSupportRoutes(app: FastifyInstance) {
   // POST /live-chat/sessions/:id/messages — Send message
   app.post('/sessions/:id/messages', async (request, reply) => {
     const { id } = request.params as { id: string }
-    const { senderType, senderId, message, fileUrl } = request.body as {
-      senderType: 'VISITOR' | 'STAFF'; senderId?: string; message: string; fileUrl?: string
+    const { senderType, senderId, visitorId, message, fileUrl } = request.body as {
+      senderType: 'VISITOR' | 'STAFF'; senderId?: string; visitorId?: string; message: string; fileUrl?: string
     }
 
     const session = await prisma.liveChatSession.findUnique({ where: { id } })
     if (!session || session.status === 'CLOSED') {
       return reply.status(400).send({ error: 'الجلسة غير متاحة' })
+    }
+
+    if (senderType === 'STAFF') {
+      const authHeader = request.headers.authorization
+      if (!authHeader) return reply.status(401).send({ error: 'غير مصرح' })
+
+      try {
+        await request.jwtVerify()
+      } catch {
+        return reply.status(401).send({ error: 'غير مصرح' })
+      }
+
+      const merchantId = (request.user as any).id
+      const ownedSession = await findMerchantLiveChatSession(merchantId, id)
+      if (!ownedSession) return reply.status(403).send({ error: 'غير مصرح' })
+    } else {
+      const effectiveVisitorId = visitorId || senderId
+      if (!effectiveVisitorId || effectiveVisitorId !== session.visitorId) {
+        return reply.status(403).send({ error: 'غير مصرح' })
+      }
     }
 
     const msg = await prisma.liveChatSupportMessage.create({
@@ -286,7 +445,24 @@ export async function liveChatSupportRoutes(app: FastifyInstance) {
   // GET /live-chat/sessions/:id/messages — Get messages
   app.get('/sessions/:id/messages', async (request, reply) => {
     const { id } = request.params as { id: string }
-    const { since } = request.query as { since?: string }
+    const { since, visitorId } = request.query as { since?: string; visitorId?: string }
+
+    const session = await prisma.liveChatSession.findUnique({ where: { id }, select: { visitorId: true } })
+    if (!session) return reply.status(404).send({ error: 'الجلسة غير موجودة' })
+
+    const authHeader = request.headers.authorization
+    if (authHeader) {
+      try {
+        await request.jwtVerify()
+        const merchantId = (request.user as any).id
+        const ownedSession = await findMerchantLiveChatSession(merchantId, id)
+        if (!ownedSession) return reply.status(403).send({ error: 'غير مصرح' })
+      } catch {
+        return reply.status(401).send({ error: 'غير مصرح' })
+      }
+    } else if (!visitorId || visitorId !== session.visitorId) {
+      return reply.status(403).send({ error: 'غير مصرح' })
+    }
 
     const where: any = { sessionId: id }
     if (since) where.createdAt = { gt: new Date(since) }
@@ -303,7 +479,24 @@ export async function liveChatSupportRoutes(app: FastifyInstance) {
   // PATCH /live-chat/sessions/:id/close — Close session
   app.patch('/sessions/:id/close', async (request, reply) => {
     const { id } = request.params as { id: string }
-    const { rating } = request.body as { rating?: number }
+    const { rating, visitorId } = request.body as { rating?: number; visitorId?: string }
+
+    const session = await prisma.liveChatSession.findUnique({ where: { id }, select: { visitorId: true } })
+    if (!session) return reply.status(404).send({ error: 'الجلسة غير موجودة' })
+
+    const authHeader = request.headers.authorization
+    if (authHeader) {
+      try {
+        await request.jwtVerify()
+        const merchantId = (request.user as any).id
+        const ownedSession = await findMerchantLiveChatSession(merchantId, id)
+        if (!ownedSession) return reply.status(403).send({ error: 'غير مصرح' })
+      } catch {
+        return reply.status(401).send({ error: 'غير مصرح' })
+      }
+    } else if (!visitorId || visitorId !== session.visitorId) {
+      return reply.status(403).send({ error: 'غير مصرح' })
+    }
 
     await prisma.liveChatSession.update({
       where: { id },

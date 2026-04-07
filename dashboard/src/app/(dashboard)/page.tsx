@@ -5,12 +5,12 @@ import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
 import { Header } from "@/components/layout/header";
 import { StatCard, Card, CardHeader, CardBody } from "@/components/ui/card";
-import { Badge, orderStatusBadge, paymentStatusBadge } from "@/components/ui/badge";
+import { orderStatusBadge, paymentStatusBadge, Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonStatCard, SkeletonTableRow } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatBHD, formatDateTime } from "@/lib/utils";
-import type { StoreStats, Order } from "@/types";
+import type { Order } from "@/types";
 import {
   TrendingUp,
   ShoppingCart,
@@ -38,38 +38,53 @@ import {
   Bar,
 } from "recharts";
 
-/* ─── Mock chart data ─── */
-const revenueData = [
-  { day: "السبت",    revenue: 420, orders: 12 },
-  { day: "الأحد",    revenue: 380, orders: 10 },
-  { day: "الاثنين",  revenue: 610, orders: 18 },
-  { day: "الثلاثاء", revenue: 520, orders: 14 },
-  { day: "الأربعاء", revenue: 780, orders: 22 },
-  { day: "الخميس",   revenue: 890, orders: 26 },
-  { day: "الجمعة",   revenue: 650, orders: 19 },
-];
+interface DashboardAnalytics {
+  revenue: number;
+  orders: number;
+  customers: number;
+  products: number;
+  revenueGrowth?: number;
+  ordersGrowth?: number;
+  avgOrderValue?: number;
+  recentOrders?: Order[];
+}
+
+interface RevenueSummary {
+  daily: Array<{ date: string; revenue: number; orders: number }>;
+}
 
 function getGreeting() {
-  const h = new Date().getHours();
-  if (h < 12) return "صباح الخير";
-  if (h < 17) return "مساء الخير";
+  const hour = new Date().getHours();
+  if (hour < 12) return "صباح الخير";
+  if (hour < 17) return "مساء الخير";
   return "مساء النور";
 }
 
 const quickActions = [
-  { label: "منتج جديد",  href: "/products/new",    icon: Package,   color: "text-indigo-600 bg-indigo-50 hover:bg-indigo-100" },
-  { label: "كوبون جديد", href: "/coupons",          icon: Tag,       color: "text-amber-600 bg-amber-50 hover:bg-amber-100" },
-  { label: "حملة تسويق", href: "/email-marketing",  icon: Megaphone, color: "text-emerald-600 bg-emerald-50 hover:bg-emerald-100" },
-  { label: "التقارير",   href: "/analytics",        icon: BarChart2, color: "text-blue-600 bg-blue-50 hover:bg-blue-100" },
+  { label: "منتج جديد", href: "/products/new", icon: Package, color: "text-indigo-600 bg-indigo-50 hover:bg-indigo-100" },
+  { label: "كوبون جديد", href: "/coupons", icon: Tag, color: "text-amber-600 bg-amber-50 hover:bg-amber-100" },
+  { label: "حملة تسويق", href: "/email-marketing", icon: Megaphone, color: "text-emerald-600 bg-emerald-50 hover:bg-emerald-100" },
+  { label: "التقارير", href: "/analytics", icon: BarChart2, color: "text-blue-600 bg-blue-50 hover:bg-blue-100" },
 ];
 
 export default function DashboardPage() {
   const { store } = useAuthStore();
 
-  const { data: stats, isLoading } = useQuery<StoreStats>({
-    queryKey: ["store-stats", store?.id],
+  const { data: stats, isLoading } = useQuery<DashboardAnalytics>({
+    queryKey: ["dashboard-analytics", store?.id],
     queryFn: async () => {
-      const res = await api.get(`/stores/${store!.id}/stats`);
+      const res = await api.get(`/analytics/dashboard?storeId=${store!.id}&period=7d`);
+      return res.data;
+    },
+    enabled: !!store?.id,
+  });
+
+  const { data: revenueSummary } = useQuery<RevenueSummary>({
+    queryKey: ["dashboard-revenue", store?.id],
+    queryFn: async () => {
+      const endDate = new Date().toISOString().split("T")[0];
+      const startDate = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+      const res = await api.get(`/analytics/revenue?storeId=${store!.id}&startDate=${startDate}&endDate=${endDate}`);
       return res.data;
     },
     enabled: !!store?.id,
@@ -94,8 +109,13 @@ export default function DashboardPage() {
     );
   }
 
-  const pendingOrders  = stats?.recentOrders?.filter((o: Order) => o.status === "PENDING").length ?? 0;
-  const newOrdersToday = stats?.recentOrders?.length ?? 0;
+  const chartData = (revenueSummary?.daily ?? []).map((entry) => ({
+    day: new Date(entry.date).toLocaleDateString("ar-BH", { weekday: "short" }),
+    revenue: entry.revenue,
+    orders: entry.orders,
+  }));
+  const pendingOrders = stats?.recentOrders?.filter((order) => order.status === "PENDING").length ?? 0;
+  const newOrdersToday = revenueSummary?.daily.at(-1)?.orders ?? 0;
 
   return (
     <div className="flex flex-col min-h-full">
@@ -105,8 +125,6 @@ export default function DashboardPage() {
       />
 
       <div className="p-6 space-y-6">
-
-        {/* ── Quick Actions ── */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {quickActions.map(({ label, href, icon: Icon, color }) => (
             <Link
@@ -122,7 +140,6 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* ── KPI Stat Cards ── */}
         <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
           {isLoading ? (
             <>
@@ -135,31 +152,31 @@ export default function DashboardPage() {
             <>
               <StatCard
                 title="إجمالي الإيرادات"
-                value={formatBHD(stats?.totalRevenue ?? 0)}
-                rawValue={stats?.totalRevenue}
+                value={formatBHD(stats?.revenue ?? 0)}
+                rawValue={stats?.revenue}
                 change={stats?.revenueGrowth}
                 color="indigo"
                 icon={<TrendingUp />}
               />
               <StatCard
                 title="الطلبات"
-                value={(stats?.totalOrders ?? 0).toLocaleString("ar")}
-                rawValue={stats?.totalOrders}
+                value={(stats?.orders ?? 0).toLocaleString("ar")}
+                rawValue={stats?.orders}
                 change={stats?.ordersGrowth}
                 color="amber"
                 icon={<ShoppingCart />}
               />
               <StatCard
                 title="المنتجات"
-                value={(stats?.totalProducts ?? 0).toLocaleString("ar")}
-                rawValue={stats?.totalProducts}
+                value={(stats?.products ?? 0).toLocaleString("ar")}
+                rawValue={stats?.products}
                 color="emerald"
                 icon={<Package />}
               />
               <StatCard
                 title="العملاء"
-                value={(stats?.totalCustomers ?? 0).toLocaleString("ar")}
-                rawValue={stats?.totalCustomers}
+                value={(stats?.customers ?? 0).toLocaleString("ar")}
+                rawValue={stats?.customers}
                 color="blue"
                 icon={<Users />}
               />
@@ -167,13 +184,10 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* ── Charts Row ── */}
         <div className="grid gap-5 xl:grid-cols-3">
-
-          {/* Revenue Area Chart */}
           <Card className="xl:col-span-2">
             <CardHeader
-              title="الإيرادات — آخر 7 أيام"
+              title="الإيرادات خلال آخر 7 أيام"
               subtitle="بالدينار البحريني"
               action={
                 <Link href="/finance" className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 transition-colors">
@@ -183,11 +197,11 @@ export default function DashboardPage() {
             />
             <CardBody className="pt-2">
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={revenueData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                   <defs>
                     <linearGradient id="grad1" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%"   stopColor="#6366f1" stopOpacity={0.18} />
-                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0}    />
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.18} />
+                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
@@ -195,9 +209,14 @@ export default function DashboardPage() {
                   <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                   <Tooltip
                     contentStyle={{ borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: "12px", boxShadow: "0 4px 16px rgba(0,0,0,0.08)", padding: "8px 12px" }}
-                    formatter={(v) => [typeof v === "number" ? formatBHD(v) : v, "الإيرادات"]}
+                    formatter={(value) => [typeof value === "number" ? formatBHD(value) : value, "الإيرادات"]}
                   />
-                  <Area type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2.5} fill="url(#grad1)"
+                  <Area
+                    type="monotone"
+                    dataKey="revenue"
+                    stroke="#6366f1"
+                    strokeWidth={2.5}
+                    fill="url(#grad1)"
                     dot={{ r: 3, fill: "#6366f1", strokeWidth: 0 }}
                     activeDot={{ r: 5, fill: "#6366f1", strokeWidth: 0 }}
                   />
@@ -206,16 +225,15 @@ export default function DashboardPage() {
             </CardBody>
           </Card>
 
-          {/* Side column */}
           <div className="space-y-4">
             <Card>
               <CardHeader title="الطلبات اليومية" subtitle="آخر 7 أيام" />
               <CardBody className="pt-1 pb-3">
                 <ResponsiveContainer width="100%" height={90}>
-                  <BarChart data={revenueData} margin={{ top: 0, right: 0, left: -30, bottom: 0 }}>
+                  <BarChart data={chartData} margin={{ top: 0, right: 0, left: -30, bottom: 0 }}>
                     <Bar dataKey="orders" fill="#6366f1" radius={[4, 4, 0, 0]} opacity={0.85} />
                     <XAxis dataKey="day" tick={{ fontSize: 9, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
-                    <Tooltip contentStyle={{ borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "11px" }} formatter={(v) => [v, "طلبات"]} />
+                    <Tooltip contentStyle={{ borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "11px" }} formatter={(value) => [value, "طلبات"]} />
                   </BarChart>
                 </ResponsiveContainer>
               </CardBody>
@@ -250,7 +268,7 @@ export default function DashboardPage() {
                     <span className="text-sm text-slate-600">متوسط الطلب</span>
                   </div>
                   <span className="text-sm font-bold text-slate-900">
-                    {stats && stats.totalOrders > 0 ? formatBHD(stats.totalRevenue / stats.totalOrders) : "—"}
+                    {stats && stats.orders > 0 ? formatBHD(stats.avgOrderValue ?? (stats.revenue / stats.orders)) : "—"}
                   </span>
                 </div>
               </CardBody>
@@ -258,7 +276,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Recent Orders ── */}
         <Card>
           <CardHeader
             title="آخر الطلبات"
@@ -300,11 +317,11 @@ export default function DashboardPage() {
                     </td>
                   </tr>
                 ) : (
-                  stats.recentOrders.map((order: Order, i: number) => (
+                  stats.recentOrders.map((order, index) => (
                     <tr
                       key={order.id}
                       className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors animate-fade-in"
-                      style={{ animationDelay: `${i * 50}ms` }}
+                      style={{ animationDelay: `${index * 50}ms` }}
                     >
                       <td className="px-6 py-3.5 font-mono text-[13px] font-semibold">
                         <Link href={`/orders/${order.id}`} className="text-indigo-600 hover:text-indigo-700 hover:underline transition-colors">
@@ -323,7 +340,6 @@ export default function DashboardPage() {
             </table>
           </div>
         </Card>
-
       </div>
     </div>
   );

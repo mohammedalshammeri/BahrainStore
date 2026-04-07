@@ -51,9 +51,9 @@ export default function DomainPage() {
 
   const sslStatus: Record<string, { label: string; color: string; icon: any }> = {
     ACTIVE: { label: "نشط", color: "bg-green-100 text-green-700", icon: Shield },
-    PENDING: { label: "جارٍ الإصدار", color: "bg-yellow-100 text-yellow-700", icon: Clock },
-    ISSUING: { label: "يُصدر الآن", color: "bg-blue-100 text-blue-700", icon: RefreshCw },
-    FAILED: { label: "فشل", color: "bg-red-100 text-red-700", icon: AlertCircle },
+    PENDING: { label: "بانتظار التفعيل", color: "bg-yellow-100 text-yellow-700", icon: Clock },
+    ISSUING: { label: "قيد المعالجة", color: "bg-blue-100 text-blue-700", icon: RefreshCw },
+    FAILED: { label: "غير جاهز حالياً", color: "bg-red-100 text-red-700", icon: AlertCircle },
     EXPIRED: { label: "منتهي الصلاحية", color: "bg-gray-100 text-gray-700", icon: AlertCircle },
   };
 
@@ -141,6 +141,12 @@ export default function DomainPage() {
                 </Badge>
               </div>
             </div>
+
+            {domain.verified && domain.sslStatus !== "ACTIVE" && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                تم التحقق من DNS، لكن SSL الآلي غير مفعّل حالياً. لن نعرض الشهادة كأنها صادرة قبل وجود تكامل حقيقي.
+              </div>
+            )}
 
             {!domain.verified && (
               <Button

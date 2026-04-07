@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
-import { requireAdmin } from '../middleware/auth.middleware'
+import { requireAdmin, requireFullPlatformAdmin } from '../middleware/auth.middleware'
 
 // ─── Partner Program Routes ────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ export async function partnerRoutes(app: FastifyInstance) {
   })
 
   // GET /partners/all — Admin: all partners
-  app.get('/all', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/all', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { status, page = 1, limit = 20 } = request.query as { status?: string; page?: number; limit?: number }
 
     const where: any = {}
@@ -92,7 +92,7 @@ export async function partnerRoutes(app: FastifyInstance) {
   })
 
   // PATCH /partners/:id/approve — Admin: approve partner
-  app.patch('/:id/approve', { preHandler: requireAdmin }, async (request, reply) => {
+  app.patch('/:id/approve', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { id } = request.params as { id: string }
     const { commissionRate } = request.body as { commissionRate?: number }
 
@@ -108,7 +108,7 @@ export async function partnerRoutes(app: FastifyInstance) {
   })
 
   // PATCH /partners/:id/certify — Admin: award certified badge
-  app.patch('/:id/certify', { preHandler: requireAdmin }, async (request, reply) => {
+  app.patch('/:id/certify', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { id } = request.params as { id: string }
     const partner = await prisma.partner.update({ where: { id }, data: { certifiedBadge: true } })
     return reply.send({ message: 'تم منح شهادة الشريك المعتمد', partner })
@@ -132,7 +132,7 @@ export async function partnerRoutes(app: FastifyInstance) {
   })
 
   // POST /partners/:id/payout — Admin: record commission payout
-  app.post('/:id/payout', { preHandler: requireAdmin }, async (request, reply) => {
+  app.post('/:id/payout', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { id } = request.params as { id: string }
     const { amount } = request.body as { amount: number }
 

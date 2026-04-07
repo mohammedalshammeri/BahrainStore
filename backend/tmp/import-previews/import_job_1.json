@@ -1,0 +1,207 @@
+{
+  "fileName": "catalog.csv",
+  "fileKind": "CSV",
+  "headers": [
+    "title",
+    "price",
+    "stock"
+  ],
+  "mapping": [
+    {
+      "field": "title",
+      "header": "title",
+      "confidence": 1,
+      "source": "heuristic"
+    },
+    {
+      "field": "description",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "sku",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "price",
+      "header": "price",
+      "confidence": 1,
+      "source": "heuristic"
+    },
+    {
+      "field": "comparePrice",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "stock",
+      "header": "stock",
+      "confidence": 1,
+      "source": "heuristic"
+    },
+    {
+      "field": "category",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "imageUrl",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "variantGroup",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "variantName",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "option1Name",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "option1Value",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "option2Name",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "option2Value",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "status",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "seoTitle",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "seoDescription",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "barcode",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "weight",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "tags",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    },
+    {
+      "field": "brand",
+      "header": null,
+      "confidence": 0,
+      "source": "heuristic"
+    }
+  ],
+  "rows": [
+    {
+      "index": 1,
+      "raw": {
+        "title": "Bag",
+        "price": "10",
+        "stock": "5"
+      },
+      "normalized": {
+        "title": "Bag",
+        "price": 10,
+        "comparePrice": null,
+        "stock": 5,
+        "imageUrls": [],
+        "status": "active",
+        "weight": null,
+        "tags": []
+      },
+      "issues": [
+        {
+          "field": "imageUrl",
+          "severity": "warning",
+          "message": "لا توجد صورة لهذا الصف"
+        }
+      ],
+      "severity": "warning"
+    },
+    {
+      "index": 2,
+      "raw": {
+        "title": "",
+        "price": "0",
+        "stock": "2"
+      },
+      "normalized": {
+        "title": "",
+        "price": 0,
+        "comparePrice": null,
+        "stock": 2,
+        "imageUrls": [],
+        "status": "active",
+        "weight": null,
+        "tags": []
+      },
+      "issues": [
+        {
+          "field": "title",
+          "severity": "blocked",
+          "message": "اسم المنتج مفقود"
+        },
+        {
+          "field": "imageUrl",
+          "severity": "warning",
+          "message": "لا توجد صورة لهذا الصف"
+        }
+      ],
+      "severity": "blocked"
+    }
+  ],
+  "summary": {
+    "totalRows": 2,
+    "validRows": 0,
+    "warningRows": 1,
+    "blockedRows": 1,
+    "duplicateSkuCount": 0,
+    "missingImageCount": 2,
+    "variantRowCount": 0,
+    "createdAt": "2026-04-07T21:37:56.967Z"
+  },
+  "warnings": []
+}

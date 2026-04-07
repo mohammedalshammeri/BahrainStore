@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { findMerchantRestaurantOrder, findMerchantRestaurantTable, findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 import crypto from 'node:crypto'
 
@@ -19,6 +20,10 @@ export async function restaurantRoutes(app: FastifyInstance) {
   app.get('/tables', { preHandler: authenticate }, async (request, reply) => {
     const { storeId } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
+
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const tables = await prisma.restaurantTable.findMany({
       where: { storeId },
@@ -54,7 +59,11 @@ export async function restaurantRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: parsed.error.flatten() })
 
-    const store = await prisma.store.findUnique({ where: { id: parsed.data.storeId }, select: { slug: true, subdomain: true } })
+    const merchantId = (request.user as any).id
+    const store = await prisma.store.findFirst({
+      where: { id: parsed.data.storeId, merchantId },
+      select: { slug: true, subdomain: true },
+    })
     if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
 
     const tableId = crypto.randomBytes(8).toString('hex')
@@ -86,6 +95,10 @@ export async function restaurantRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
+    const merchantId = (request.user as any).id
+    const existingTable = await findMerchantRestaurantTable(merchantId, id)
+    if (!existingTable) return reply.status(403).send({ error: 'غير مصرح' })
+
     const table = await prisma.restaurantTable.update({ where: { id }, data: parsed.data })
     return reply.send({ success: true, table })
   })
@@ -93,6 +106,11 @@ export async function restaurantRoutes(app: FastifyInstance) {
   // ─── DELETE /restaurant/tables/:id ───────────────────────────────────────
   app.delete('/tables/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as any
+
+    const merchantId = (request.user as any).id
+    const table = await findMerchantRestaurantTable(merchantId, id)
+    if (!table) return reply.status(403).send({ error: 'غير مصرح' })
+
     await prisma.restaurantTable.delete({ where: { id } })
     return reply.send({ success: true })
   })
@@ -204,6 +222,10 @@ export async function restaurantRoutes(app: FastifyInstance) {
     const { storeId, status } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
     const where: any = { storeId }
     if (status) where.status = status
     else where.status = { notIn: ['PAID', 'CANCELLED'] }
@@ -250,6 +272,10 @@ export async function restaurantRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
+    const merchantId = (request.user as any).id
+    const existingOrder = await findMerchantRestaurantOrder(merchantId, id)
+    if (!existingOrder) return reply.status(403).send({ error: 'غير مصرح' })
+
     const order = await prisma.restaurantOrder.update({
       where: { id },
       data: {
@@ -279,6 +305,10 @@ export async function restaurantRoutes(app: FastifyInstance) {
   app.get('/kitchen', { preHandler: authenticate }, async (request, reply) => {
     const { storeId } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
+
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const activeOrders = await prisma.restaurantOrder.findMany({
       where: { storeId, status: { in: ['PENDING', 'CONFIRMED', 'PREPARING'] } },
@@ -321,6 +351,10 @@ export async function restaurantRoutes(app: FastifyInstance) {
   app.get('/stats', { preHandler: authenticate }, async (request, reply) => {
     const { storeId, date } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
+
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const targetDate = date ? new Date(date) : new Date()
     const dayStart = new Date(targetDate.setHours(0, 0, 0, 0))

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth.middleware'
+import { authenticate, requireAdmin, requirePlatformPermission } from '../middleware/auth.middleware'
 
 export async function supportRoutes(app: FastifyInstance) {
 
@@ -115,10 +115,7 @@ export async function supportRoutes(app: FastifyInstance) {
 
   // ── Admin endpoints ────────────────────────────
   // List all tickets (admin)
-  app.get('/admin/all', { preHandler: authenticate }, async (request, reply) => {
-    const user = request.user as any
-    if (!user.isAdmin) return reply.status(403).send({ error: 'للمشرفين فقط' })
-
+  app.get('/admin/all', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (request, reply) => {
     const { status, priority, page = '1' } = request.query as { status?: string; priority?: string; page?: string }
 
     const take = 20
@@ -150,10 +147,8 @@ export async function supportRoutes(app: FastifyInstance) {
   })
 
   // Admin reply to ticket
-  app.post('/admin/:id/reply', { preHandler: authenticate }, async (request, reply) => {
+  app.post('/admin/:id/reply', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (request, reply) => {
     const user = request.user as any
-    if (!user.isAdmin) return reply.status(403).send({ error: 'للمشرفين فقط' })
-
     const { id } = request.params as { id: string }
     const schema = z.object({ body: z.string().min(1) })
     const result = schema.safeParse(request.body)
@@ -173,10 +168,7 @@ export async function supportRoutes(app: FastifyInstance) {
   })
 
   // Admin resolve ticket
-  app.patch('/admin/:id/resolve', { preHandler: authenticate }, async (request, reply) => {
-    const user = request.user as any
-    if (!user.isAdmin) return reply.status(403).send({ error: 'للمشرفين فقط' })
-
+  app.patch('/admin/:id/resolve', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (request, reply) => {
     const { id } = request.params as { id: string }
     await prisma.supportTicket.update({
       where: { id },

@@ -2,14 +2,13 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import https from 'node:https'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth.middleware'
-import { requireAdmin } from '../middleware/auth.middleware'
+import { authenticate, requireAdmin, requireFullPlatformAdmin, requirePlatformPermission } from '../middleware/auth.middleware'
 
 // ─── Platform Health Dashboard + Monitoring ───────────────────────────────────
 
 export async function healthDashboardRoutes(app: FastifyInstance) {
   // GET /platform/health — Full platform health status
-  app.get('/health', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/health', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (request, reply) => {
     const now = new Date()
     const oneHourAgo = new Date(now.getTime() - 3600000)
     const oneDayAgo = new Date(now.getTime() - 86400000)
@@ -60,7 +59,7 @@ export async function healthDashboardRoutes(app: FastifyInstance) {
   })
 
   // GET /platform/errors — Error log viewer
-  app.get('/errors', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/errors', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (request, reply) => {
     const { page = 1, limit = 50, level, storeId } = request.query as {
       page?: number; limit?: number; level?: string; storeId?: string
     }
@@ -103,7 +102,7 @@ export async function healthDashboardRoutes(app: FastifyInstance) {
   })
 
   // GET /platform/metrics — System metrics history
-  app.get('/metrics', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/metrics', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (request, reply) => {
     const { metricName, hours = 24 } = request.query as { metricName?: string; hours?: number }
 
     const since = new Date(Date.now() - Number(hours) * 3600000)
@@ -135,13 +134,13 @@ export async function healthDashboardRoutes(app: FastifyInstance) {
   })
 
   // GET /platform/alerts — Alert configurations
-  app.get('/alerts', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/alerts', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (request, reply) => {
     const alerts = await prisma.systemAlertConfig.findMany({ orderBy: { createdAt: 'desc' } })
     return reply.send({ alerts })
   })
 
   // POST /platform/alerts — Create alert
-  app.post('/alerts', { preHandler: requireAdmin }, async (request, reply) => {
+  app.post('/alerts', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const schema = z.object({
       name: z.string().min(1),
       metricName: z.string().min(1),
@@ -159,14 +158,14 @@ export async function healthDashboardRoutes(app: FastifyInstance) {
   })
 
   // DELETE /platform/alerts/:id
-  app.delete('/alerts/:id', { preHandler: requireAdmin }, async (request, reply) => {
+  app.delete('/alerts/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { id } = request.params as { id: string }
     await prisma.systemAlertConfig.delete({ where: { id } })
     return reply.send({ message: 'تم حذف التنبيه' })
   })
 
   // GET /platform/store-usage/:storeId — Per-store resource usage
-  app.get('/store-usage/:storeId', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/store-usage/:storeId', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (request, reply) => {
     const { storeId } = request.params as { storeId: string }
 
     const [productCount, orderCount, customerCount, apiCalls] = await Promise.all([
@@ -189,7 +188,7 @@ export async function healthDashboardRoutes(app: FastifyInstance) {
   })
 
   // GET /platform/country-map — Orders + merchants by country
-  app.get('/country-map', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/country-map', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (request, reply) => {
     const pageViewsByCountry = await prisma.pageView.groupBy({
       by: ['country'],
       _count: { id: true },
@@ -210,7 +209,7 @@ export async function healthDashboardRoutes(app: FastifyInstance) {
   })
 
   // GET /platform/conversion-funnel — Registration→paid conversion
-  app.get('/conversion-funnel', { preHandler: requireAdmin }, async (request, reply) => {
+  app.get('/conversion-funnel', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (request, reply) => {
     const [registered, onboarded, firstOrder, paid] = await Promise.all([
       prisma.merchant.count(),
       prisma.onboarding.count({ where: { completedAt: { not: null } } }),
@@ -229,7 +228,7 @@ export async function healthDashboardRoutes(app: FastifyInstance) {
   })
 
   // POST /platform/notify — Send alert (Slack/Email)
-  app.post('/notify', { preHandler: requireAdmin }, async (request, reply) => {
+  app.post('/notify', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { channel, destination, message, subject } = request.body as {
       channel: 'EMAIL' | 'SLACK'; destination: string; message: string; subject?: string
     }

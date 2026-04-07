@@ -40,6 +40,9 @@ export async function verificationRoutes(app: FastifyInstance) {
         status: true,
         reviewNote: true,
         reviewedAt: true,
+        reviewedBy: true,
+        expiresAt: true,
+        reVerifyBy: true,
         createdAt: true,
       },
     })
@@ -111,17 +114,10 @@ export async function verificationRoutes(app: FastifyInstance) {
       },
     })
 
-    // Bump merchant kycStatus to PENDING only when it was NONE; do not downgrade APPROVED
-    const merchant = await prisma.merchant.findUnique({
+    await prisma.merchant.update({
       where: { id: merchantId },
-      select: { kycStatus: true },
+      data: { kycStatus: 'PENDING' },
     })
-    if (merchant?.kycStatus === 'NONE') {
-      await prisma.merchant.update({
-        where: { id: merchantId },
-        data: { kycStatus: 'PENDING' },
-      })
-    }
 
     return reply.status(201).send({
       message: 'تم رفع المستند بنجاح، سيتم مراجعته خلال 24 ساعة',

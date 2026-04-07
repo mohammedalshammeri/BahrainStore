@@ -15,6 +15,7 @@ export default function PaymentCallbackPage() {
 
   const [status, setStatus] = useState<PaymentStatus>("loading");
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
+  const [trackToken, setTrackToken] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export default function PaymentCallbackPage() {
           }
           const res = await api.get(`/payment/tap/verify?chargeId=${chargeId}&orderId=${orderId}`);
           setOrderNumber(res.data.orderNumber ?? null);
+          setTrackToken(res.data.trackToken ?? null);
           setStatus(res.data.status === "PAID" ? "paid" : res.data.status === "FAILED" ? "failed" : "pending");
         } else if (gateway === "moyasar") {
           // Moyasar appends ?id=xxx&status=paid
@@ -50,6 +52,7 @@ export default function PaymentCallbackPage() {
           }
           const res = await api.get(`/payment/moyasar/verify?id=${paymentId}&orderId=${orderId}`);
           setOrderNumber(res.data.orderNumber ?? null);
+          setTrackToken(res.data.trackToken ?? null);
           setStatus(res.data.status === "PAID" ? "paid" : res.data.status === "FAILED" ? "failed" : "pending");
         } else {
           setStatus("failed");
@@ -88,7 +91,7 @@ export default function PaymentCallbackPage() {
         <div className="flex flex-col gap-3 max-w-xs mx-auto">
           {orderNumber && (
             <Link
-              href={`/${subdomain}/orders/${orderNumber}`}
+              href={`/${subdomain}/orders/${orderNumber}?token=${encodeURIComponent(trackToken ?? "")}`}
               className="inline-flex items-center justify-center gap-2 bg-indigo-600 text-white font-semibold px-8 py-3 rounded-full hover:bg-indigo-700 transition"
             >
               تتبع طلبي
@@ -116,7 +119,7 @@ export default function PaymentCallbackPage() {
         <div className="flex flex-col gap-3 max-w-xs mx-auto">
           {orderNumber && (
             <Link
-              href={`/${subdomain}/orders/${orderNumber}`}
+              href={`/${subdomain}/orders/${orderNumber}?token=${encodeURIComponent(trackToken ?? "")}`}
               className="inline-flex items-center justify-center gap-2 bg-amber-500 text-white font-semibold px-8 py-3 rounded-full hover:bg-amber-600 transition"
             >
               تتبع طلبي

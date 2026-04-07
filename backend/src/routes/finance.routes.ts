@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma'
+import { findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 export async function financeRoutes(fastify: FastifyInstance) {
@@ -12,8 +13,9 @@ export async function financeRoutes(fastify: FastifyInstance) {
     const from = new Date()
     from.setDate(from.getDate() - days)
 
-    const store = await prisma.store.findUnique({ where: { id: storeId } })
-    if (!store) return reply.code(404).send({ error: 'Store not found' })
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const [orders, prevOrders] = await Promise.all([
       prisma.order.findMany({
@@ -64,6 +66,10 @@ export async function financeRoutes(fastify: FastifyInstance) {
   fastify.get('/finance/vat-report', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId, year, month } = req.query as any
     if (!storeId) return reply.code(400).send({ error: 'storeId required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const y = parseInt(year ?? new Date().getFullYear())
     const m = month ? parseInt(month) : null
@@ -124,6 +130,10 @@ export async function financeRoutes(fastify: FastifyInstance) {
   fastify.get('/finance/export', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId, period = '30', format = 'csv' } = req.query as any
     if (!storeId) return reply.code(400).send({ error: 'storeId required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const days = parseInt(period)
     const from = new Date()

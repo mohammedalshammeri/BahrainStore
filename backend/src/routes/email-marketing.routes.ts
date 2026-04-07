@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma'
+import { sendStoreCampaignEmail } from '../lib/email'
+import { findMerchantEmailCampaign, findMerchantEmailSubscriber, findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 export async function emailMarketingRoutes(fastify: FastifyInstance) {
@@ -9,6 +11,10 @@ export async function emailMarketingRoutes(fastify: FastifyInstance) {
   fastify.get('/email-marketing/campaigns', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId } = req.query as any
     if (!storeId) return reply.code(400).send({ error: 'storeId required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const campaigns = await prisma.emailCampaign.findMany({
       where: { storeId },
@@ -21,6 +27,10 @@ export async function emailMarketingRoutes(fastify: FastifyInstance) {
   fastify.post('/email-marketing/campaigns', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId, name, subject, subjectAr, body, bodyAr, scheduledAt } = req.body as any
     if (!storeId || !name) return reply.code(400).send({ error: 'storeId and name required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const campaign = await prisma.emailCampaign.create({
       data: {
@@ -42,7 +52,11 @@ export async function emailMarketingRoutes(fastify: FastifyInstance) {
     const { id } = req.params as any
     const data = req.body as any
 
-    const campaign = await prisma.emailCampaign.update({
+    const merchantId = req.user.id
+    const campaign = await findMerchantEmailCampaign(merchantId, id)
+    if (!campaign) return reply.code(403).send({ error: 'غير مصرح' })
+
+    const updatedCampaign = await prisma.emailCampaign.update({
       where: { id },
       data: {
         name: data.name,
@@ -54,34 +68,103 @@ export async function emailMarketingRoutes(fastify: FastifyInstance) {
         status: data.status ?? undefined,
       },
     })
-    return campaign
+    return updatedCampaign
   })
 
   // DELETE campaign
   fastify.delete('/email-marketing/campaigns/:id', { preHandler: authenticate }, async (req: any, reply) => {
     const { id } = req.params as any
+
+    const merchantId = req.user.id
+    const campaign = await findMerchantEmailCampaign(merchantId, id)
+    if (!campaign) return reply.code(403).send({ error: 'غير مصرح' })
+
     await prisma.emailCampaign.delete({ where: { id } })
     return { success: true }
   })
 
-  // POST send campaign now (simulated – marks as SENT, updates recipientCount)
   fastify.post('/email-marketing/campaigns/:id/send', { preHandler: authenticate }, async (req: any, reply) => {
     const { id } = req.params as any
 
-    const campaign = await prisma.emailCampaign.findUnique({ where: { id } })
-    if (!campaign) return reply.code(404).send({ error: 'Campaign not found' })
+    const merchantId = req.user.id
+    const campaignAccess = await findMerchantEmailCampaign(merchantId, id)
+    if (!campaignAccess) return reply.code(403).send({ error: 'غير مصرح' })
+
+    const campaign = await prisma.emailCampaign.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        storeId: true,
+        status: true,
+        subject: true,
+        subjectAr: true,
+        body: true,
+        bodyAr: true,
+        scheduledAt: true,
+      },
+    })
+    if (!campaign) return reply.code(404).send({ error: 'الحملة غير موجودة' })
+
     if (campaign.status === 'SENT') return reply.code(400).send({ error: 'Already sent' })
 
-    // Count active subscribers
-    const count = await prisma.emailSubscriber.count({
-      where: { storeId: campaign.storeId, isActive: true },
+    const storeAccess = await findMerchantStore(merchantId, campaign.storeId)
+    if (!storeAccess) return reply.code(403).send({ error: 'غير مصرح' })
+
+    const store = await prisma.store.findUnique({
+      where: { id: campaign.storeId },
+      select: { id: true, name: true, nameAr: true },
     })
+    if (!store) return reply.code(404).send({ error: 'المتجر غير موجود' })
+
+    const subscribers = await prisma.emailSubscriber.findMany({
+      where: { storeId: campaign.storeId, isActive: true },
+      select: { email: true, firstName: true },
+    })
+
+    if (subscribers.length === 0) {
+      return reply.code(400).send({ error: 'لا يوجد مشتركون نشطون لإرسال الحملة' })
+    }
+
+    const subject = campaign.subjectAr ?? campaign.subject
+    const body = campaign.bodyAr ?? campaign.body
+
+    if (!subject || !body) {
+      return reply.code(400).send({ error: 'موضوع الحملة ومحتواها مطلوبان قبل الإرسال' })
+    }
+
+    await prisma.emailCampaign.update({ where: { id }, data: { status: 'SENDING' } })
+
+    let sent = 0
+
+    try {
+      for (const subscriber of subscribers) {
+        await sendStoreCampaignEmail({
+          to: subscriber.email,
+          firstName: subscriber.firstName,
+          storeName: store.nameAr ?? store.name,
+          subject,
+          body,
+        })
+        sent++
+      }
+    } catch (error: any) {
+      await prisma.emailCampaign.update({
+        where: { id },
+        data: { status: campaign.scheduledAt ? 'SCHEDULED' : 'DRAFT' },
+      })
+
+      if (error?.name === 'EMAIL_NOT_CONFIGURED' || error?.message === 'EMAIL_NOT_CONFIGURED') {
+        return reply.code(503).send({ error: 'إرسال البريد غير جاهز حالياً. أضف إعدادات SMTP أولاً.' })
+      }
+
+      return reply.code(500).send({ error: 'فشل إرسال الحملة البريدية' })
+    }
 
     const updated = await prisma.emailCampaign.update({
       where: { id },
-      data: { status: 'SENT', sentAt: new Date(), recipientCount: count },
+      data: { status: 'SENT', sentAt: new Date(), recipientCount: sent },
     })
-    return updated
+    return reply.send({ campaign: updated, sent })
   })
 
   // ── SUBSCRIBERS ─────────────────────────────────────────────────
@@ -90,6 +173,10 @@ export async function emailMarketingRoutes(fastify: FastifyInstance) {
   fastify.get('/email-marketing/subscribers', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId, page = '1', limit = '50', active } = req.query as any
     if (!storeId) return reply.code(400).send({ error: 'storeId required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const skip = (parseInt(page) - 1) * parseInt(limit)
     const where: any = { storeId }
@@ -125,6 +212,11 @@ export async function emailMarketingRoutes(fastify: FastifyInstance) {
   // DELETE / unsubscribe
   fastify.delete('/email-marketing/subscribers/:id', { preHandler: authenticate }, async (req: any, reply) => {
     const { id } = req.params as any
+
+    const merchantId = req.user.id
+    const subscriber = await findMerchantEmailSubscriber(merchantId, id)
+    if (!subscriber) return reply.code(403).send({ error: 'غير مصرح' })
+
     await prisma.emailSubscriber.update({
       where: { id },
       data: { isActive: false, unsubscribedAt: new Date() },
@@ -148,6 +240,10 @@ export async function emailMarketingRoutes(fastify: FastifyInstance) {
   fastify.get('/email-marketing/stats', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId } = req.query as any
     if (!storeId) return reply.code(400).send({ error: 'storeId required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const [total, active, campaigns] = await Promise.all([
       prisma.emailSubscriber.count({ where: { storeId } }),

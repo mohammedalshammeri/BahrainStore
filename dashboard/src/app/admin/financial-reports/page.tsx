@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, getAccessToken } from "@/lib/api";
+import { getPublicApiUrl } from "@/lib/env";
 import {
   TrendingUp, TrendingDown, DollarSign, Users, AlertTriangle,
   Download, RefreshCw, BarChart2,
@@ -52,7 +53,7 @@ const PLAN_COLOR: Record<string, string> = {
 
 const PIE_COLORS = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"];
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
+const API_BASE = getPublicApiUrl();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -138,7 +139,8 @@ export default function FinancialReportsPage() {
   const isLoading = mrrLoading || advLoading || cohortLoading || atRiskLoading;
 
   function handleExport(path: string) {
-    const tkn = document.cookie.split("; ").find((c) => c.startsWith("accessToken="))?.split("=")[1];
+    const tkn = getAccessToken();
+    if (!tkn) return;
     fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${tkn}` } })
       .then((r) => r.blob())
       .then((blob) => {

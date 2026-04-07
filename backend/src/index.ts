@@ -1,7 +1,9 @@
 import 'dotenv/config'
 import { buildServer } from './server'
+import { validateEnv } from './lib/env'
 
-const PORT = parseInt(process.env.PORT || '3001')
+const env = validateEnv()
+const PORT = env.PORT
 
 async function main() {
   const app = await buildServer()

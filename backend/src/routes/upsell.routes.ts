@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma'
+import { findMerchantCountdownTimer, findMerchantStore, findMerchantUpsellRule } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 export async function upsellRoutes(fastify: FastifyInstance) {
@@ -9,6 +10,10 @@ export async function upsellRoutes(fastify: FastifyInstance) {
   fastify.get('/upsell/rules', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId } = req.query as any
     if (!storeId) return reply.code(400).send({ error: 'storeId required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const rules = await prisma.upsellRule.findMany({
       where: { storeId },
@@ -21,6 +26,10 @@ export async function upsellRoutes(fastify: FastifyInstance) {
   fastify.post('/upsell/rules', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId, name, title, titleAr, isActive, triggerType, triggerProductId, triggerCategoryId, offerProductIds, discountPct } = req.body as any
     if (!storeId || !name) return reply.code(400).send({ error: 'storeId and name required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const rule = await prisma.upsellRule.create({
       data: {
@@ -44,7 +53,11 @@ export async function upsellRoutes(fastify: FastifyInstance) {
     const { id } = req.params as any
     const data = req.body as any
 
-    const rule = await prisma.upsellRule.update({
+    const merchantId = req.user.id
+    const rule = await findMerchantUpsellRule(merchantId, id)
+    if (!rule) return reply.code(403).send({ error: 'غير مصرح' })
+
+    const updatedRule = await prisma.upsellRule.update({
       where: { id },
       data: {
         name: data.name,
@@ -58,12 +71,17 @@ export async function upsellRoutes(fastify: FastifyInstance) {
         discountPct: data.discountPct ?? null,
       },
     })
-    return rule
+    return updatedRule
   })
 
   // DELETE rule
   fastify.delete('/upsell/rules/:id', { preHandler: authenticate }, async (req: any, reply) => {
     const { id } = req.params as any
+
+    const merchantId = req.user.id
+    const rule = await findMerchantUpsellRule(merchantId, id)
+    if (!rule) return reply.code(403).send({ error: 'غير مصرح' })
+
     await prisma.upsellRule.delete({ where: { id } })
     return { success: true }
   })
@@ -118,6 +136,10 @@ export async function upsellRoutes(fastify: FastifyInstance) {
     const { storeId } = req.query as any
     if (!storeId) return reply.code(400).send({ error: 'storeId required' })
 
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
+
     const timers = await prisma.countdownTimer.findMany({
       where: { storeId },
       orderBy: { createdAt: 'desc' },
@@ -129,6 +151,10 @@ export async function upsellRoutes(fastify: FastifyInstance) {
   fastify.post('/countdown/timers', { preHandler: authenticate }, async (req: any, reply) => {
     const { storeId, name, title, titleAr, endsAt, isActive, showOnAllPages, targetUrl, style } = req.body as any
     if (!storeId || !name || !endsAt) return reply.code(400).send({ error: 'storeId, name, endsAt required' })
+
+    const merchantId = req.user.id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.code(403).send({ error: 'غير مصرح' })
 
     const timer = await prisma.countdownTimer.create({
       data: {
@@ -151,7 +177,11 @@ export async function upsellRoutes(fastify: FastifyInstance) {
     const { id } = req.params as any
     const data = req.body as any
 
-    const timer = await prisma.countdownTimer.update({
+    const merchantId = req.user.id
+    const timer = await findMerchantCountdownTimer(merchantId, id)
+    if (!timer) return reply.code(403).send({ error: 'غير مصرح' })
+
+    const updatedTimer = await prisma.countdownTimer.update({
       where: { id },
       data: {
         name: data.name,
@@ -164,12 +194,17 @@ export async function upsellRoutes(fastify: FastifyInstance) {
         style: data.style ?? undefined,
       },
     })
-    return timer
+    return updatedTimer
   })
 
   // DELETE timer
   fastify.delete('/countdown/timers/:id', { preHandler: authenticate }, async (req: any, reply) => {
     const { id } = req.params as any
+
+    const merchantId = req.user.id
+    const timer = await findMerchantCountdownTimer(merchantId, id)
+    if (!timer) return reply.code(403).send({ error: 'غير مصرح' })
+
     await prisma.countdownTimer.delete({ where: { id } })
     return { success: true }
   })

@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
+import { getPublicApiUrl } from "@/lib/env";
 import { Header } from "@/components/layout/header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -283,7 +284,7 @@ export default function ProductsPage() {
                               <Edit2 className="h-3.5 w-3.5" />
                             </button>
                           </Link>
-                          <a href={`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001"}/api/v1/inventory/barcode/${product.id}?storeId=${store?.id}`} download target="_blank" rel="noopener noreferrer">
+                          <a href={`${getPublicApiUrl()}/inventory/barcode/${product.id}?storeId=${store?.id}`} download target="_blank" rel="noopener noreferrer">
                             <button className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-purple-50 hover:text-purple-600 transition-colors" title="تنزيل الباركود">
                               <Barcode className="h-3.5 w-3.5" />
                             </button>

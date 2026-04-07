@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
-import { Bot, Send, Sparkles, Loader2, Trash2, ChevronRight, Zap, TrendingUp, Package, MessageSquare } from "lucide-react";
+import { Bot, Send, Sparkles, Loader2, Trash2, Zap, TrendingUp, MessageSquare, ShieldAlert, ShieldCheck } from "lucide-react";
 
 interface ChatMessage {
   id: string;
@@ -17,6 +17,23 @@ interface Suggestion {
   text: string;
   category: string;
 }
+
+interface AICapabilities {
+  overallStatus: "enabled" | "degraded" | "unavailable";
+  reason?: string;
+  lastFailureAt?: string | null;
+  features: {
+    copilot: { status: "enabled" | "degraded" | "unavailable"; reason?: string };
+    productWriter: { status: "enabled" | "degraded" | "unavailable"; reason?: string };
+    storeAnalysis: { status: "enabled" | "degraded" | "unavailable"; reason?: string };
+  };
+}
+
+const capabilityBadge: Record<AICapabilities["overallStatus"], { label: string; className: string; Icon: typeof ShieldCheck }> = {
+  enabled: { label: "جاهز", className: "bg-emerald-100 text-emerald-700", Icon: ShieldCheck },
+  degraded: { label: "متدهور", className: "bg-amber-100 text-amber-700", Icon: ShieldAlert },
+  unavailable: { label: "غير متاح", className: "bg-rose-100 text-rose-700", Icon: ShieldAlert },
+};
 
 export default function AiPage() {
   const { store } = useAuthStore();
@@ -35,11 +52,13 @@ export default function AiPage() {
   // Analysis state
   const [analysis, setAnalysis] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [capabilities, setCapabilities] = useState<AICapabilities | null>(null);
 
   useEffect(() => {
     if (store) {
       loadHistory();
       loadSuggestions();
+      loadCapabilities();
     }
   }, [store]);
 
@@ -61,9 +80,16 @@ export default function AiPage() {
     } catch {}
   };
 
+  const loadCapabilities = async () => {
+    try {
+      const res = await api.get("/ai/capabilities");
+      setCapabilities(res.data);
+    } catch {}
+  };
+
   const sendMessage = async (text?: string) => {
     const msg = text || input.trim();
-    if (!msg || !store) return;
+    if (!msg || !store || capabilities?.features.copilot.status === "unavailable") return;
 
     const newMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -85,11 +111,13 @@ export default function AiPage() {
         createdAt: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
-    } catch {
+    } catch (error: any) {
+      const capability = error?.response?.data?.capability;
+      if (capability) setCapabilities(capability);
       const errorMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        message: "عذراً، حدث خطأ. تأكد من إعداد مفتاح OpenAI في إعدادات المنصة.",
+        message: error?.response?.data?.error || "تعذر الوصول إلى خدمات AI حالياً.",
         createdAt: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -107,7 +135,7 @@ export default function AiPage() {
   };
 
   const runProductWriter = async () => {
-    if (!writerForm.productName || !store) return;
+    if (!writerForm.productName || !store || capabilities?.features.productWriter.status === "unavailable") return;
     setWriterLoading(true);
     setWriterResult(null);
     try {
@@ -120,26 +148,32 @@ export default function AiPage() {
         language: "both",
       });
       setWriterResult(res.data.data);
-    } catch {
-      alert("فشل توليد المحتوى");
+    } catch (error: any) {
+      const capability = error?.response?.data?.capability;
+      if (capability) setCapabilities(capability);
+      alert(error?.response?.data?.error || "فشل توليد المحتوى");
     } finally {
       setWriterLoading(false);
     }
   };
 
   const runAnalysis = async () => {
-    if (!store) return;
+    if (!store || capabilities?.features.storeAnalysis.status === "unavailable") return;
     setAnalysisLoading(true);
     setAnalysis(null);
     try {
       const res = await api.post("/ai/analyze-store", { storeId: store.id });
       setAnalysis(res.data);
-    } catch {
-      alert("فشل تحليل المتجر");
+    } catch (error: any) {
+      const capability = error?.response?.data?.capability;
+      if (capability) setCapabilities(capability);
+      alert(error?.response?.data?.error || "فشل تحليل المتجر");
     } finally {
       setAnalysisLoading(false);
     }
   };
+
+  const overallCapability = capabilities ? capabilityBadge[capabilities.overallStatus] : null;
 
   return (
     <div className="flex flex-col h-screen bg-slate-50">
@@ -155,6 +189,12 @@ export default function AiPage() {
               <p className="text-sm text-slate-500">مساعدك الذكي لتنمية متجرك</p>
             </div>
           </div>
+          {overallCapability && (
+            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${overallCapability.className}`}>
+              <overallCapability.Icon className="h-4 w-4" />
+              {overallCapability.label}
+            </div>
+          )}
           <div className="flex gap-2 bg-slate-100 rounded-lg p-1">
             {[
               { id: "copilot", label: "المساعد", icon: MessageSquare },
@@ -197,6 +237,12 @@ export default function AiPage() {
 
           {/* Chat area */}
           <div className="flex flex-1 flex-col">
+            {capabilities && capabilities.features.copilot.status !== "enabled" && (
+              <div className={`mx-6 mt-6 rounded-2xl border p-4 text-sm ${capabilities.features.copilot.status === "degraded" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                <p className="font-semibold mb-1">حالة Copilot: {capabilities.features.copilot.status === "degraded" ? "متدهور" : "غير متاح"}</p>
+                <p>{capabilities.features.copilot.reason || capabilities.reason}</p>
+              </div>
+            )}
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {messages.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-full text-center">
@@ -256,7 +302,7 @@ export default function AiPage() {
                   />
                   <button
                     onClick={() => sendMessage()}
-                    disabled={loading || !input.trim()}
+                    disabled={loading || !input.trim() || capabilities?.features.copilot.status === "unavailable"}
                     className="flex items-center justify-center h-12 w-12 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                   >
                     <Send className="h-5 w-5" />
@@ -272,6 +318,12 @@ export default function AiPage() {
       {tab === "writer" && (
         <div className="flex-1 overflow-y-auto p-6">
           <div className="max-w-2xl mx-auto">
+            {capabilities && capabilities.features.productWriter.status !== "enabled" && (
+              <div className={`mb-6 rounded-2xl border p-4 text-sm ${capabilities.features.productWriter.status === "degraded" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                <p className="font-semibold mb-1">كاتب المنتجات {capabilities.features.productWriter.status === "degraded" ? "متاح جزئياً" : "غير متاح"}</p>
+                <p>{capabilities.features.productWriter.reason || capabilities.reason}</p>
+              </div>
+            )}
             <div className="bg-white rounded-2xl border p-6 mb-6">
               <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-indigo-500" />
@@ -322,7 +374,7 @@ export default function AiPage() {
                 </div>
                 <button
                   onClick={runProductWriter}
-                  disabled={writerLoading || !writerForm.productName}
+                  disabled={writerLoading || !writerForm.productName || capabilities?.features.productWriter.status === "unavailable"}
                   className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white rounded-xl py-3 font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                 >
                   {writerLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
@@ -372,12 +424,18 @@ export default function AiPage() {
       {tab === "analyze" && (
         <div className="flex-1 overflow-y-auto p-6">
           <div className="max-w-3xl mx-auto">
+            {capabilities && capabilities.features.storeAnalysis.status !== "enabled" && (
+              <div className={`mb-6 rounded-2xl border p-4 text-sm ${capabilities.features.storeAnalysis.status === "degraded" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                <p className="font-semibold mb-1">تحليل المتجر {capabilities.features.storeAnalysis.status === "degraded" ? "متاح جزئياً" : "غير متاح"}</p>
+                <p>{capabilities.features.storeAnalysis.reason || capabilities.reason}</p>
+              </div>
+            )}
             <div className="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl p-6 text-white mb-6">
               <h2 className="text-xl font-bold mb-2">تحليل المتجر الذكي</h2>
               <p className="text-indigo-200 text-sm mb-4">يحلل AI أداء متجرك ويعطيك توصيات مخصصة لزيادة المبيعات</p>
               <button
                 onClick={runAnalysis}
-                disabled={analysisLoading}
+                disabled={analysisLoading || capabilities?.features.storeAnalysis.status === "unavailable"}
                 className="flex items-center gap-2 bg-white text-indigo-600 rounded-xl px-6 py-3 font-medium hover:bg-indigo-50 disabled:opacity-50 transition-colors"
               >
                 {analysisLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <TrendingUp className="h-5 w-5" />}

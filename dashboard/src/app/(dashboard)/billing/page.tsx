@@ -131,8 +131,8 @@ export default function BillingPage() {
     setUpgrading(plan);
     setMsg(null);
     try {
-      await api.post("/billing/upgrade", { storeId: store.id, plan });
-      setMsg({ ok: true, text: `تم ترقية المتجر إلى خطة ${plans[plan]?.nameAr ?? plan} ✅` });
+      const res = await api.post("/billing/upgrade", { storeId: store.id, plan });
+      setMsg({ ok: true, text: res.data?.message ?? `تم إنشاء طلب الترقية لخطة ${plans[plan]?.nameAr ?? plan}` });
       fetchAll();
     } catch (e: any) {
       setMsg({ ok: false, text: e?.response?.data?.error ?? "فشل الترقية" });

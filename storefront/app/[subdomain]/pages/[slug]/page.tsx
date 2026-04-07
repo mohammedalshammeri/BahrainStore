@@ -1,23 +1,18 @@
-import { api } from "@/lib/api";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
+import { PreviewableThemePage } from "@/components/theme/PreviewableThemePage";
+import { resolvePageTemplate } from "@/components/theme/template-resolver";
+import type { ThemeGlobalData } from "@/components/theme/types";
+import { getContentPageData, getPublicPage } from "@/lib/storefront-server";
 
 interface Props {
   params: Promise<{ subdomain: string; slug: string }>;
-}
-
-async function getPage(subdomain: string, slug: string) {
-  try {
-    const res = await api.get(`/pages/public/${subdomain}/${slug}`);
-    return res.data.page;
-  } catch {
-    return null;
-  }
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { subdomain, slug } = await params;
-  const page = await getPage(subdomain, slug);
+  const page = await getPublicPage(subdomain, slug).catch(() => null);
   if (!page) return {};
   return {
     title: page.seoTitle || page.titleAr || page.title,
@@ -25,25 +20,41 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-export default async function StorePage({ params }: Props) {
+export default async function StorePage({ params, searchParams }: Props) {
   const { subdomain, slug } = await params;
-  const page = await getPage(subdomain, slug);
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const data = await getContentPageData(subdomain, slug).catch(() => null);
+  const page = data?.page ?? null;
   if (!page) notFound();
+  const resolvedTemplate = resolvePageTemplate(data?.template, data!.store, "page");
+  const previewEnabled = resolvedSearchParams.__builderPreview === "1";
+  const previewOrigin = typeof resolvedSearchParams.__builderOrigin === "string" ? resolvedSearchParams.__builderOrigin : undefined;
+
+  const globalData: ThemeGlobalData = {
+    store: data!.store,
+    products: [],
+    categories: [],
+    subdomain,
+    pageType: "page",
+    page,
+    themeSettings: {
+      ...resolvedTemplate.themeSettings,
+      themeId: resolvedTemplate.themeId,
+      source: resolvedTemplate.source,
+    },
+  };
 
   return (
-    <div className="min-h-screen bg-white" dir="rtl">
-      <div className="max-w-3xl mx-auto px-4 py-12">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8 pb-6 border-b">
-          {page.titleAr || page.title}
-        </h1>
-        {page.excerpt && (
-          <p className="text-lg text-gray-500 mb-8 leading-relaxed">{page.excerpt}</p>
-        )}
-        <div
-          className="prose prose-lg max-w-none text-gray-800 leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: (page.contentAr || page.content).replace(/\n/g, "<br />") }}
-        />
-      </div>
-    </div>
+    <PreviewableThemePage
+      store={data!.store}
+      subdomain={subdomain}
+      pageType="page"
+      initialTemplate={resolvedTemplate.template}
+      initialThemeId={resolvedTemplate.themeId ?? data!.store.settings?.theme ?? "default"}
+      initialThemeSettings={globalData.themeSettings ?? {}}
+      globalData={globalData}
+      previewEnabled={previewEnabled}
+      previewOrigin={previewOrigin}
+    />
   );
 }

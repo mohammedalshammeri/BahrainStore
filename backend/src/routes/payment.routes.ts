@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
 import https from 'node:https'
+import { createOrderTrackingToken } from '../lib/order-tracking'
+import { getEnv } from '../lib/env'
 
 // ─── Helper: HTTPS POST (no external deps) ────────────────────────────────────
 function httpPost(url: string, body: object, headers: Record<string, string>): Promise<any> {
@@ -64,7 +66,118 @@ function httpGet(url: string, headers: Record<string, string>): Promise<any> {
   })
 }
 
+type TapChargeResponse = {
+  id?: string
+  status?: string
+  amount?: number | string
+  currency?: string
+  metadata?: {
+    orderId?: string
+    storeId?: string
+  }
+}
+
+type TamaraOrderResponse = {
+  order_id?: string
+  order_reference_id?: string
+  order_number?: string
+  status?: string
+  order_status?: string
+  total_amount?: {
+    amount?: number | string
+    currency?: string
+  }
+}
+
+function normalizeAmount(value: unknown): number | null {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? Math.round(amount * 1000) : null
+}
+
+function getTapPaymentStatus(charge: TapChargeResponse): 'PAID' | 'FAILED' | 'PENDING' {
+  const status = String(charge.status ?? '').toUpperCase()
+
+  if (status === 'CAPTURED') return 'PAID'
+  if (status === 'DECLINED' || status === 'CANCELLED' || status === 'FAILED') return 'FAILED'
+
+  return 'PENDING'
+}
+
+function tapChargeMatchesOrder(
+  charge: TapChargeResponse,
+  expected: { orderId: string; storeId: string; amount: unknown; currency: string }
+): boolean {
+  if (charge.id == null) return false
+  if (charge.metadata?.orderId && charge.metadata.orderId !== expected.orderId) return false
+  if (charge.metadata?.storeId && charge.metadata.storeId !== expected.storeId) return false
+
+  const expectedAmount = normalizeAmount(expected.amount)
+  const chargeAmount = normalizeAmount(charge.amount)
+  if (expectedAmount !== null && chargeAmount !== null && expectedAmount !== chargeAmount) return false
+
+  if (charge.currency && charge.currency !== expected.currency) return false
+
+  return true
+}
+
+async function fetchTapCharge(chargeId: string, secretKey: string): Promise<TapChargeResponse> {
+  return httpGet(`https://api.tap.company/v2/charges/${chargeId}`, {
+    Authorization: `Bearer ${secretKey}`,
+  })
+}
+
+async function applyVerifiedTapCharge(payment: { id: string; orderId: string; order: { status: string } }, charge: TapChargeResponse) {
+  const status = getTapPaymentStatus(charge)
+
+  await prisma.payment.update({
+    where: { id: payment.id },
+    data: {
+      status,
+      gatewayResponse: charge as any,
+      paidAt: status === 'PAID' ? new Date() : undefined,
+    },
+  })
+
+  await prisma.order.update({
+    where: { id: payment.orderId },
+    data: {
+      paymentStatus: status,
+      paidAt: status === 'PAID' ? new Date() : undefined,
+      ...(status === 'PAID' ? { status: 'CONFIRMED' as const } : {}),
+    },
+  })
+
+  return status
+}
+
+function getTamaraPaymentStatus(order: TamaraOrderResponse): 'PAID' | 'FAILED' | 'PENDING' {
+  const status = String(order.order_status ?? order.status ?? '').toUpperCase()
+
+  if (['APPROVED', 'CAPTURED', 'COMPLETED', 'PAID'].includes(status)) return 'PAID'
+  if (['CANCELLED', 'DECLINED', 'FAILED', 'EXPIRED', 'REJECTED'].includes(status)) return 'FAILED'
+
+  return 'PENDING'
+}
+
+function tamaraOrderMatchesOrder(
+  tamaraOrder: TamaraOrderResponse,
+  order: { orderNumber: string; total: unknown; store: { currency: string } }
+) {
+  if (tamaraOrder.order_reference_id && tamaraOrder.order_reference_id !== order.orderNumber) return false
+  if (tamaraOrder.order_number && tamaraOrder.order_number !== order.orderNumber) return false
+
+  const expectedAmount = normalizeAmount(order.total)
+  const actualAmount = normalizeAmount(tamaraOrder.total_amount?.amount)
+  if (expectedAmount !== null && actualAmount !== null && expectedAmount !== actualAmount) return false
+
+  if (tamaraOrder.total_amount?.currency && tamaraOrder.total_amount.currency !== order.store.currency) return false
+
+  return true
+}
+
 export async function paymentRoutes(app: FastifyInstance) {
+  const env = getEnv()
+
   // ─────────────────────────────────────────────────────────────────
   // TAP PAYMENTS
   // ─────────────────────────────────────────────────────────────────
@@ -111,7 +224,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       },
       source: { id: 'src_all' },
       redirect: { url: successUrl },
-      post: { url: `${process.env.API_BASE_URL ?? 'http://localhost:3001'}/api/v1/payment/tap/webhook` },
+      post: { url: `${env.API_BASE_URL}/api/v1/payment/tap/webhook` },
       description: `طلب #${order.orderNumber}`,
       metadata: { orderId: order.id, storeId: order.storeId },
     }
@@ -163,30 +276,41 @@ export async function paymentRoutes(app: FastifyInstance) {
 
     const payment = await prisma.payment.findFirst({
       where: { gatewayRef: chargeId },
-      include: { order: true },
+      include: {
+        order: {
+          include: {
+            store: { include: { settings: true } },
+          },
+        },
+      },
     })
     if (!payment) return reply.send({ ok: true })
 
-    const tapStatus: string = (body?.status ?? body?.object?.status ?? '').toUpperCase()
-    const newPayStatus = tapStatus === 'CAPTURED' ? 'PAID' : tapStatus === 'DECLINED' ? 'FAILED' : null
+    const settings = payment.order.store.settings
+    if (!settings?.tapSecretKey) {
+      app.log.warn({ chargeId, orderId: payment.orderId }, 'Tap webhook ignored because store is missing tap secret')
+      return reply.status(202).send({ ok: true })
+    }
 
-    if (newPayStatus) {
-      await prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: newPayStatus as any,
-          gatewayResponse: body,
-          paidAt: newPayStatus === 'PAID' ? new Date() : undefined,
-        },
-      })
-      await prisma.order.update({
-        where: { id: payment.orderId },
-        data: {
-          paymentStatus: newPayStatus as any,
-          status: newPayStatus === 'PAID' ? 'CONFIRMED' : payment.order.status,
-          paidAt: newPayStatus === 'PAID' ? new Date() : undefined,
-        },
-      })
+    try {
+      const verifiedCharge = await fetchTapCharge(chargeId, settings.tapSecretKey)
+
+      if (
+        !tapChargeMatchesOrder(verifiedCharge, {
+          orderId: payment.orderId,
+          storeId: payment.order.storeId,
+          amount: payment.amount,
+          currency: payment.currency,
+        })
+      ) {
+        app.log.warn({ chargeId, orderId: payment.orderId }, 'Tap webhook verification payload mismatch')
+        return reply.status(409).send({ error: 'charge mismatch' })
+      }
+
+      await applyVerifiedTapCharge(payment, verifiedCharge)
+    } catch (err) {
+      app.log.error({ err, chargeId, orderId: payment.orderId }, 'Tap webhook verification failed')
+      return reply.status(502).send({ error: 'verification failed' })
     }
 
     return reply.send({ ok: true })
@@ -209,12 +333,20 @@ export async function paymentRoutes(app: FastifyInstance) {
     if (!settings?.tapSecretKey) return reply.status(400).send({ error: 'Tap غير مفعّل' })
 
     try {
-      const tapRes = await httpGet(`https://api.tap.company/v2/charges/${chargeId}`, {
-        Authorization: `Bearer ${settings.tapSecretKey}`,
-      })
+      const tapRes = await fetchTapCharge(chargeId, settings.tapSecretKey)
 
-      const tapStatus: string = (tapRes?.status ?? '').toUpperCase()
-      const newPayStatus = tapStatus === 'CAPTURED' ? 'PAID' : tapStatus === 'DECLINED' ? 'FAILED' : 'PENDING'
+      if (
+        !tapChargeMatchesOrder(tapRes, {
+          orderId: order.id,
+          storeId: order.storeId,
+          amount: order.total,
+          currency: order.store.currency,
+        })
+      ) {
+        return reply.status(409).send({ error: 'بيانات الدفع لا تطابق الطلب' })
+      }
+
+      const newPayStatus = getTapPaymentStatus(tapRes)
 
       await prisma.payment.upsert({
         where: { orderId: order.id },
@@ -243,7 +375,13 @@ export async function paymentRoutes(app: FastifyInstance) {
         })
       }
 
-      return reply.send({ status: newPayStatus, orderNumber: order.orderNumber })
+      const trackToken = createOrderTrackingToken({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        storeId: order.storeId,
+      })
+
+      return reply.send({ status: newPayStatus, orderNumber: order.orderNumber, trackToken })
     } catch (err) {
       app.log.error(err)
       return reply.status(502).send({ error: 'تعذر التحقق من Tap' })
@@ -381,7 +519,13 @@ export async function paymentRoutes(app: FastifyInstance) {
         })
       }
 
-      return reply.send({ status: newPayStatus, orderNumber: order.orderNumber })
+      const trackToken = createOrderTrackingToken({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        storeId: order.storeId,
+      })
+
+      return reply.send({ status: newPayStatus, orderNumber: order.orderNumber, trackToken })
     } catch (err) {
       app.log.error(err)
       return reply.status(502).send({ error: 'تعذر التحقق من Moyasar' })
@@ -596,18 +740,69 @@ export async function paymentRoutes(app: FastifyInstance) {
 
   // Tamara webhook
   app.post('/tamara/webhook', async (request, reply) => {
-    const { order_id, order_status } = request.body as any
-    if (!order_id) return reply.send({ ok: true })
+    const body = request.body as {
+      order_id?: string
+      order_reference_id?: string
+      order_number?: string
+    }
 
-    const order = await prisma.order.findFirst({ where: { orderNumber: order_id } })
-    if (!order) return reply.send({ ok: true })
+    const orderReference = body.order_reference_id ?? body.order_number ?? body.order_id
+    if (!orderReference) return reply.send({ ok: true })
 
-    if (order_status === 'approved') {
+    const order = await prisma.order.findFirst({
+      where: { orderNumber: orderReference },
+      include: { payment: true, store: { include: { settings: true } } },
+    })
+    if (!order?.payment) return reply.send({ ok: true })
+
+    const settings = order.store.settings
+    if (!settings?.tamaraToken) {
+      app.log.warn({ orderId: order.id }, 'Tamara webhook ignored because store is missing token')
+      return reply.status(202).send({ ok: true })
+    }
+
+    const providerOrderId = body.order_id
+    if (!providerOrderId) {
+      app.log.warn({ orderId: order.id }, 'Tamara webhook ignored because provider order id is missing')
+      return reply.status(202).send({ ok: true })
+    }
+
+    let verifiedOrder: TamaraOrderResponse
+    try {
+      verifiedOrder = await httpGet(`https://api.tamara.co/orders/${providerOrderId}`, {
+        Authorization: `Bearer ${settings.tamaraToken}`,
+      })
+    } catch (err) {
+      app.log.error({ err, orderId: order.id, providerOrderId }, 'Tamara webhook verification failed')
+      return reply.status(502).send({ error: 'verification failed' })
+    }
+
+    if (!tamaraOrderMatchesOrder(verifiedOrder, order)) {
+      app.log.warn({ orderId: order.id, providerOrderId }, 'Tamara webhook verification mismatch')
+      return reply.status(409).send({ error: 'charge mismatch' })
+    }
+
+    const status = getTamaraPaymentStatus(verifiedOrder)
+    if (status !== 'PENDING') {
+      await prisma.payment.update({
+        where: { id: order.payment.id },
+        data: {
+          status,
+          paidAt: status === 'PAID' ? new Date() : undefined,
+          gatewayResponse: verifiedOrder as any,
+        },
+      })
+
       await prisma.order.update({
         where: { id: order.id },
-        data: { paymentStatus: 'PAID', status: 'CONFIRMED', paidAt: new Date() },
+        data: {
+          paymentStatus: status,
+          paidAt: status === 'PAID' ? new Date() : undefined,
+          ...(status === 'PAID' ? { status: 'CONFIRMED' as const } : {}),
+        },
       })
     }
+
     return reply.send({ ok: true })
   })
 }

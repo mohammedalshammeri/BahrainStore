@@ -11,22 +11,18 @@ function GoogleCallbackContent() {
   const { setMerchant, setStore } = useAuthStore();
 
   useEffect(() => {
-    const at = params.get("at");
-    const rt = params.get("rt");
+    const code = params.get("code");
 
-    if (!at || !rt) {
+    window.history.replaceState({}, "", "/google-callback");
+
+    if (!code) {
       router.replace("/login?error=google_auth_failed");
       return;
     }
-
-    // Clear tokens from URL immediately
-    window.history.replaceState({}, "", "/google-callback");
-
-    setAuth(at, rt);
-
     api
-      .get("/auth/me")
+      .post("/auth/google/exchange", { code })
       .then(async (res) => {
+        setAuth(res.data.accessToken, res.data.refreshToken);
         setMerchant(res.data.merchant);
         try {
           const storeRes = await api.get("/stores");

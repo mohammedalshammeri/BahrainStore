@@ -10,6 +10,7 @@ import { Eye, EyeOff, Mail, Lock, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, setAuth } from "@/lib/api";
+import { getPublicApiOrigin } from "@/lib/env";
 import { useAuthStore } from "@/store/auth.store";
 
 const schema = z.object({
@@ -36,7 +37,7 @@ function LoginContent() {
   const [twoFACode, setTwoFACode] = useState("");
   const [twoFALoading, setTwoFALoading] = useState(false);
 
-  const BACKEND = process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "") ?? "http://localhost:3001";
+  const BACKEND = getPublicApiOrigin();
 
   const {
     register,

@@ -9,6 +9,14 @@
 
 namespace Bazar;
 
+function verifyWebhookSignature(string $payload, string $signature, string $secret): bool
+{
+    $providedSignature = preg_replace('/^sha256=/', '', $signature) ?? $signature;
+    $expectedSignature = hash_hmac('sha256', $payload, $secret);
+
+    return hash_equals($expectedSignature, $providedSignature);
+}
+
 class BazarException extends \RuntimeException
 {
     private int $statusCode;
@@ -41,22 +49,17 @@ class ProductsResource extends BaseResource
 {
     public function list(array $options = []): array
     {
-        return $this->client->request('GET', '/products', null, array_merge(
-            ['storeId' => $this->storeId],
-            $options
-        ));
+        return $this->client->request('GET', '/products', null, $options);
     }
 
-    public function get(string $id): array
+    public function get(string $slug): array
     {
-        return $this->client->request('GET', "/products/{$id}");
+        return $this->client->request('GET', "/products/{$slug}");
     }
 
     public function getBySlug(string $slug): array
     {
-        return $this->client->request('GET', "/products/slug/{$slug}", null, [
-            'storeId' => $this->storeId,
-        ]);
+        return $this->get($slug);
     }
 }
 
@@ -64,28 +67,22 @@ class OrdersResource extends BaseResource
 {
     public function list(array $options = []): array
     {
-        return $this->client->request('GET', '/orders', null, array_merge(
-            ['storeId' => $this->storeId],
-            $options
-        ));
+        return $this->client->request('GET', '/orders', null, $options);
     }
 
-    public function get(string $id): array
+    public function get(string $orderNumber): array
     {
-        return $this->client->request('GET', "/orders/{$id}");
+        return $this->client->request('GET', "/orders/{$orderNumber}");
+    }
+
+    public function getByOrderNumber(string $orderNumber): array
+    {
+        return $this->get($orderNumber);
     }
 
     public function create(array $data): array
     {
-        return $this->client->request('POST', '/orders', array_merge(
-            ['storeId' => $this->storeId],
-            $data
-        ));
-    }
-
-    public function updateStatus(string $id, string $status): array
-    {
-        return $this->client->request('PATCH', "/orders/{$id}/status", compact('status'));
+        return $this->client->request('POST', '/orders', $data);
     }
 }
 
@@ -93,15 +90,22 @@ class CustomersResource extends BaseResource
 {
     public function list(array $options = []): array
     {
-        return $this->client->request('GET', '/customers', null, array_merge(
-            ['storeId' => $this->storeId],
-            $options
-        ));
+        return $this->client->request('GET', '/customers', null, $options);
     }
 
-    public function get(string $id): array
+    public function get(string $phone): array
     {
-        return $this->client->request('GET', "/customers/{$id}");
+        return $this->client->request('GET', "/customers/{$phone}");
+    }
+
+    public function getByPhone(string $phone): array
+    {
+        return $this->get($phone);
+    }
+
+    public function upsert(array $data): array
+    {
+        return $this->client->request('POST', '/customers', $data);
     }
 }
 
@@ -109,7 +113,7 @@ class CategoriesResource extends BaseResource
 {
     public function list(): array
     {
-        return $this->client->request('GET', '/categories', null, ['storeId' => $this->storeId]);
+        return $this->client->request('GET', '/categories');
     }
 }
 
@@ -118,10 +122,22 @@ class CouponsResource extends BaseResource
     public function validate(string $code, float $orderValue): array
     {
         return $this->client->request('POST', '/coupons/validate', [
-            'storeId' => $this->storeId,
             'code' => $code,
             'orderValue' => $orderValue,
         ]);
+    }
+}
+
+class InventoryResource extends BaseResource
+{
+    public function getStock(string $productId, ?string $variantId = null): array
+    {
+        $params = ['productId' => $productId];
+        if ($variantId !== null) {
+            $params['variantId'] = $variantId;
+        }
+
+        return $this->client->request('GET', '/inventory/stock', null, $params);
     }
 }
 
@@ -136,23 +152,40 @@ class BazarClient
     public CustomersResource $customers;
     public CategoriesResource $categories;
     public CouponsResource $coupons;
+    public InventoryResource $inventory;
 
     public function __construct(array $config)
     {
         $this->apiKey = $config['api_key'] ?? '';
         $this->storeId = $config['store_id'] ?? '';
-        $this->baseUrl = $config['base_url'] ?? 'https://api.bazar.bh';
+        $this->baseUrl = rtrim($config['base_url'] ?? 'https://api.bazar.bh', '/');
 
         $this->products = new ProductsResource($this);
         $this->orders = new OrdersResource($this);
         $this->customers = new CustomersResource($this);
         $this->categories = new CategoriesResource($this);
         $this->coupons = new CouponsResource($this);
+        $this->inventory = new InventoryResource($this);
     }
 
     public function getStoreId(): string
     {
         return $this->storeId;
+    }
+
+    public function info(): array
+    {
+        return $this->request('GET', '/');
+    }
+
+    public function contract(): array
+    {
+        return $this->request('GET', '/contract');
+    }
+
+    public function changelog(): array
+    {
+        return $this->request('GET', '/changelog');
     }
 
     public function request(string $method, string $path, ?array $body = null, array $params = []): array

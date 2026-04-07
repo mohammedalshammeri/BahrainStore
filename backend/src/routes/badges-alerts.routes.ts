@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth.middleware'
+import { findMerchantStore } from '../lib/merchant-ownership'
+import { authenticate, requireAdmin } from '../middleware/auth.middleware'
 
 // ─── Merchant Badges ──────────────────────────────────────────────────────────
 // Gamification system: merchants earn badges based on their performance
@@ -130,6 +131,18 @@ async function checkBadgeCriteria(storeId: string, badge: typeof DEFAULT_BADGES[
 }
 
 export async function badgesRoutes(app: FastifyInstance) {
+  async function ensureOwnedStore(request: any, reply: any, storeId: string) {
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+
+    if (!store) {
+      reply.status(403).send({ error: 'غير مصرح' })
+      return null
+    }
+
+    return store
+  }
+
   // ─── GET /badges — All available badge definitions ─────────────────────────
   app.get('/', async (_request, reply) => {
     let badges = await prisma.merchantBadge.findMany({ where: { isActive: true } })
@@ -160,6 +173,8 @@ export async function badgesRoutes(app: FastifyInstance) {
   // Called periodically (e.g., after each order)
   app.post('/check/:storeId', { preHandler: authenticate }, async (request, reply) => {
     const { storeId } = request.params as any
+    const store = await ensureOwnedStore(request, reply, storeId)
+    if (!store) return
 
     let badges = await prisma.merchantBadge.findMany({ where: { isActive: true } })
     if (badges.length === 0) {
@@ -175,20 +190,20 @@ export async function badgesRoutes(app: FastifyInstance) {
 
       // Check if already earned
       const alreadyEarned = await prisma.merchantBadgeEarned.findUnique({
-        where: { storeId_badgeId: { storeId, badgeId: badge.id } },
+        where: { storeId_badgeId: { storeId: store.id, badgeId: badge.id } },
       })
       if (alreadyEarned) continue
 
       // Check criteria
-      const qualified = await checkBadgeCriteria(storeId, badge as any)
+      const qualified = await checkBadgeCriteria(store.id, badge as any)
       if (qualified) {
-        await prisma.merchantBadgeEarned.create({ data: { storeId, badgeId: badge.id } })
+        await prisma.merchantBadgeEarned.create({ data: { storeId: store.id, badgeId: badge.id } })
         newlyEarned.push(badge.nameAr)
       }
     }
 
     const allEarned = await prisma.merchantBadgeEarned.findMany({
-      where: { storeId },
+      where: { storeId: store.id },
       include: { badge: true },
     })
 
@@ -200,15 +215,17 @@ export async function badgesRoutes(app: FastifyInstance) {
   })
 
   // ─── POST /badges/:badgeId/grant/:storeId — Admin grant manual badge ───────
-  app.post('/:badgeId/grant/:storeId', { preHandler: authenticate }, async (request, reply) => {
+  app.post('/:badgeId/grant/:storeId', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
     const { badgeId, storeId } = request.params as any
+    const store = await prisma.store.findUnique({ where: { id: storeId }, select: { id: true } })
+    if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
 
     const badge = await prisma.merchantBadge.findUnique({ where: { id: badgeId } })
     if (!badge) return reply.status(404).send({ error: 'الشارة غير موجودة' })
 
     await prisma.merchantBadgeEarned.upsert({
-      where: { storeId_badgeId: { storeId, badgeId } },
-      create: { storeId, badgeId },
+      where: { storeId_badgeId: { storeId: store.id, badgeId } },
+      create: { storeId: store.id, badgeId },
       update: { earnedAt: new Date() },
     })
 
@@ -216,10 +233,12 @@ export async function badgesRoutes(app: FastifyInstance) {
   })
 
   // ─── DELETE /badges/:badgeId/revoke/:storeId — Admin revoke badge ──────────
-  app.delete('/:badgeId/revoke/:storeId', { preHandler: authenticate }, async (request, reply) => {
+  app.delete('/:badgeId/revoke/:storeId', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
     const { badgeId, storeId } = request.params as any
+    const store = await prisma.store.findUnique({ where: { id: storeId }, select: { id: true } })
+    if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
 
-    await prisma.merchantBadgeEarned.deleteMany({ where: { storeId, badgeId } })
+    await prisma.merchantBadgeEarned.deleteMany({ where: { storeId: store.id, badgeId } })
     return reply.send({ success: true })
   })
 }
@@ -353,13 +372,37 @@ export async function generateStoreAlerts(storeId: string): Promise<number> {
 }
 
 export async function alertsRoutes(app: FastifyInstance) {
+  async function ensureMerchantStore(request: any, reply: any, storeId: string) {
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+
+    if (!store) {
+      reply.status(403).send({ error: 'غير مصرح' })
+      return null
+    }
+
+    return store
+  }
+
+  async function findOwnedAlert(request: any, id: string) {
+    const merchantId = (request.user as any).id
+
+    return prisma.merchantAlert.findFirst({
+      where: { id, store: { merchantId } },
+      select: { id: true, storeId: true },
+    })
+  }
+
   // ─── GET /alerts — Get all alerts for a store ─────────────────────────────
   app.get('/', { preHandler: authenticate }, async (request, reply) => {
     const { storeId, unreadOnly = 'false', page = '1', limit = '20', type } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
+    const store = await ensureMerchantStore(request, reply, storeId)
+    if (!store) return
+
     const skip = (parseInt(page) - 1) * parseInt(limit)
-    const where: any = { storeId }
+    const where: any = { storeId: store.id }
     if (unreadOnly === 'true') where.isRead = false
     if (type) where.type = type
 
@@ -371,7 +414,7 @@ export async function alertsRoutes(app: FastifyInstance) {
         take: parseInt(limit),
       }),
       prisma.merchantAlert.count({ where }),
-      prisma.merchantAlert.count({ where: { storeId, isRead: false } }),
+      prisma.merchantAlert.count({ where: { storeId: store.id, isRead: false } }),
     ])
 
     return reply.send({ alerts, total, unreadCount, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) })
@@ -380,7 +423,10 @@ export async function alertsRoutes(app: FastifyInstance) {
   // ─── PATCH /alerts/:id/read ───────────────────────────────────────────────
   app.patch('/:id/read', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as any
-    await prisma.merchantAlert.update({ where: { id }, data: { isRead: true } })
+    const alert = await findOwnedAlert(request, id)
+    if (!alert) return reply.status(404).send({ error: 'التنبيه غير موجود' })
+
+    await prisma.merchantAlert.update({ where: { id: alert.id }, data: { isRead: true } })
     return reply.send({ success: true })
   })
 
@@ -388,14 +434,21 @@ export async function alertsRoutes(app: FastifyInstance) {
   app.post('/read-all', { preHandler: authenticate }, async (request, reply) => {
     const { storeId } = request.body as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
-    await prisma.merchantAlert.updateMany({ where: { storeId, isRead: false }, data: { isRead: true } })
+
+    const store = await ensureMerchantStore(request, reply, storeId)
+    if (!store) return
+
+    await prisma.merchantAlert.updateMany({ where: { storeId: store.id, isRead: false }, data: { isRead: true } })
     return reply.send({ success: true })
   })
 
   // ─── DELETE /alerts/:id ───────────────────────────────────────────────────
   app.delete('/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as any
-    await prisma.merchantAlert.delete({ where: { id } })
+    const alert = await findOwnedAlert(request, id)
+    if (!alert) return reply.status(404).send({ error: 'التنبيه غير موجود' })
+
+    await prisma.merchantAlert.delete({ where: { id: alert.id } })
     return reply.send({ success: true })
   })
 
@@ -405,7 +458,10 @@ export async function alertsRoutes(app: FastifyInstance) {
     const { storeId } = request.body as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
-    const count = await generateStoreAlerts(storeId)
+    const store = await ensureMerchantStore(request, reply, storeId)
+    if (!store) return
+
+    const count = await generateStoreAlerts(store.id)
     return reply.send({ success: true, alertsCreated: count })
   })
 
@@ -414,10 +470,13 @@ export async function alertsRoutes(app: FastifyInstance) {
     const { storeId } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
-    const config = await prisma.alertConfig.findUnique({ where: { storeId } })
+    const store = await ensureMerchantStore(request, reply, storeId)
+    if (!store) return
+
+    const config = await prisma.alertConfig.findUnique({ where: { storeId: store.id } })
     return reply.send({
       config: config || {
-        storeId,
+        storeId: store.id,
         lowStockDays: 7,
         abandonedCartMinutes: 30,
         inactiveCustomerDays: 60,
@@ -443,10 +502,13 @@ export async function alertsRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: parsed.error.flatten() })
 
+    const store = await ensureMerchantStore(request, reply, parsed.data.storeId)
+    if (!store) return
+
     const config = await prisma.alertConfig.upsert({
-      where: { storeId: parsed.data.storeId },
-      create: parsed.data as any,
-      update: parsed.data as any,
+      where: { storeId: store.id },
+      create: { ...parsed.data, storeId: store.id } as any,
+      update: { ...parsed.data, storeId: store.id } as any,
     })
 
     return reply.send({ success: true, config })
@@ -468,7 +530,10 @@ export async function alertsRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: parsed.error.flatten() })
 
-    const alert = await prisma.merchantAlert.create({ data: parsed.data as any })
+    const store = await ensureMerchantStore(request, reply, parsed.data.storeId)
+    if (!store) return
+
+    const alert = await prisma.merchantAlert.create({ data: { ...parsed.data, storeId: store.id } as any })
     return reply.status(201).send({ success: true, alert })
   })
 }

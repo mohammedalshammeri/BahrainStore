@@ -50,6 +50,7 @@ const NAV_SECTIONS = [
     items: [
       { href: "/admin/support", label: "الدعم الفني", icon: Headphones },
       { href: "/admin/health", label: "صحة النظام", icon: Activity },
+      { href: "/admin/launch-readiness", label: "جاهزية الإطلاق", icon: Zap },
       { href: "/admin/governance", label: "الحوكمة والامتثال", icon: ShieldCheck },
       { href: "/admin/infrastructure", label: "البنية التحتية", icon: Server },
       { href: "/admin/communications", label: "التواصل مع التجار", icon: MessageSquare },
@@ -84,6 +85,48 @@ const NAV_SECTIONS = [
   },
 ];
 
+const ITEM_PERMISSIONS: Record<string, string | null> = {
+  "/admin": null,
+  "/admin/analytics": "canViewFinancials",
+  "/admin/merchants": "canViewMerchants",
+  "/admin/stores": "canViewMerchants",
+  "/admin/plans": "canEditPlans",
+  "/admin/billing": "canViewFinancials",
+  "/admin/subscriptions": "canEditPlans",
+  "/admin/subscription-payments": "canViewFinancials",
+  "/admin/financial-reports": "canViewFinancials",
+  "/admin/apps": "canManageApps",
+  "/admin/themes": "canManageApps",
+  "/admin/support": "canReplyTickets",
+  "/admin/health": "canViewAuditLog",
+  "/admin/launch-readiness": "canViewAuditLog",
+  "/admin/governance": "canReviewKYC",
+  "/admin/infrastructure": null,
+  "/admin/communications": null,
+  "/admin/api-management": null,
+  "/admin/security": null,
+  "/admin/localization": null,
+  "/admin/announcements": "canManageContent",
+  "/admin/blog": "canManageContent",
+  "/admin/email-templates": "canManageContent",
+  "/admin/team": "canManageTeam",
+  "/admin/roles": "canManageTeam",
+  "/admin/audit": "canViewAuditLog",
+  "/admin/partners": null,
+  "/admin/subscription-coupons": "canEditPlans",
+  "/admin/merchant-referrals": null,
+};
+
+function resolvePermissionForPath(pathname: string) {
+  if (pathname === "/admin") return ITEM_PERMISSIONS["/admin"];
+
+  const matchedKey = Object.keys(ITEM_PERMISSIONS)
+    .filter((href) => href !== "/admin" && (pathname === href || pathname.startsWith(`${href}/`)))
+    .sort((left, right) => right.length - left.length)[0];
+
+  return matchedKey ? ITEM_PERMISSIONS[matchedKey] : null;
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { merchant, logout } = useAuthStore();
   const router = useRouter();
@@ -112,8 +155,82 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     );
   }
 
+  const platformAccess = (merchant as any).platformAccess ?? null;
+
+  if (!platformAccess) {
+    return (
+      <div className="flex items-center justify-center h-screen" style={{ background: "#060b18" }}>
+        <div className="text-center space-y-4">
+          <div
+            className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
+            style={{ background: "#0c1526", border: "1px solid #1e2d45" }}
+          >
+            <ShieldAlert className="w-7 h-7" style={{ color: "#3b82f6" }} />
+          </div>
+          <p className="text-sm" style={{ color: "#64748b" }}>جارٍ تحميل صلاحيات الإدارة...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const hasAccessTo = (href: string) => {
+    if (platformAccess.isFullAdmin) return true;
+    const permissionKey = ITEM_PERMISSIONS[href];
+    if (!permissionKey) return false;
+    return Boolean(platformAccess.permissions?.[permissionKey as keyof typeof platformAccess.permissions]);
+  };
+
+  const navSections = NAV_SECTIONS
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => hasAccessTo(item.href)),
+    }))
+    .filter((section) => section.items.length > 0);
+
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
+
+  const firstAccessibleHref = navSections[0]?.items[0]?.href ?? null;
+  const currentPathPermission = resolvePermissionForPath(pathname);
+  const currentPathAllowed = platformAccess.isFullAdmin
+    ? true
+    : currentPathPermission
+      ? Boolean(platformAccess.permissions?.[currentPathPermission as keyof typeof platformAccess.permissions])
+      : false;
+
+  useEffect(() => {
+    if (!platformAccess || platformAccess.isFullAdmin || currentPathAllowed) {
+      return;
+    }
+
+    if (firstAccessibleHref && firstAccessibleHref !== pathname) {
+      router.replace(firstAccessibleHref);
+      return;
+    }
+
+    router.replace("/");
+  }, [currentPathAllowed, firstAccessibleHref, pathname, platformAccess, router]);
+
+  if (!platformAccess.isFullAdmin && !currentPathAllowed) {
+    return (
+      <div className="flex items-center justify-center h-screen" style={{ background: "#060b18" }}>
+        <div className="text-center space-y-4 max-w-md px-6">
+          <div
+            className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
+            style={{ background: "#0c1526", border: "1px solid #1e2d45" }}
+          >
+            <ShieldAlert className="w-7 h-7" style={{ color: "#3b82f6" }} />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-lg font-bold" style={{ color: "#e2eef8" }}>لا تملك صلاحية الوصول لهذه الصفحة</h2>
+            <p className="text-sm" style={{ color: "#64748b" }}>
+              يتم تحويلك إلى أول صفحة إدارية متاحة حسب دورك الحالي.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const W = collapsed ? 64 : 224;
 
@@ -184,7 +301,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
           {/* Nav sections */}
           <nav className="flex-1 overflow-y-auto scrollbar-hide py-3 space-y-4 px-2">
-            {NAV_SECTIONS.map((section) => (
+            {navSections.map((section) => (
               <div key={section.label}>
                 {!collapsed && (
                   <p

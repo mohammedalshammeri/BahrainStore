@@ -1,7 +1,60 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth.middleware'
+import { authenticate, requireAdmin, requireFullPlatformAdmin } from '../middleware/auth.middleware'
+
+type TapBillingChargeResponse = {
+  id?: string
+  status?: string
+  amount?: number | string
+  currency?: string
+  reference?: {
+    merchant?: string
+  }
+}
+
+function normalizeBillingAmount(value: unknown): number | null {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? amount : null
+}
+
+function getTapBillingStatus(charge: TapBillingChargeResponse): 'PAID' | 'FAILED' | 'PENDING' {
+  const status = String(charge.status ?? '').toUpperCase()
+
+  if (status === 'CAPTURED') return 'PAID'
+  if (status === 'DECLINED' || status === 'CANCELLED' || status === 'FAILED') return 'FAILED'
+
+  return 'PENDING'
+}
+
+function tapBillingChargeMatchesPayment(
+  charge: TapBillingChargeResponse,
+  payment: { id: string; gatewayRef: string | null; amount: unknown; currency: string }
+): boolean {
+  if (charge.id == null || charge.id !== payment.gatewayRef) return false
+  if (charge.reference?.merchant && charge.reference.merchant !== payment.id) return false
+
+  const expectedAmount = normalizeBillingAmount(payment.amount)
+  const chargeAmount = normalizeBillingAmount(charge.amount)
+  if (expectedAmount !== null && chargeAmount !== null && expectedAmount !== chargeAmount) return false
+
+  if (charge.currency && charge.currency !== payment.currency) return false
+
+  return true
+}
+
+async function fetchTapBillingCharge(chargeId: string, secretKey: string): Promise<TapBillingChargeResponse> {
+  const response = await fetch(`https://api.tap.company/v2/charges/${chargeId}`, {
+    headers: { Authorization: `Bearer ${secretKey}` },
+  })
+
+  const data = await response.json().catch(() => null)
+  if (!response.ok || !data) {
+    throw new Error(`Tap billing verification failed with status ${response.status}`)
+  }
+
+  return data as TapBillingChargeResponse
+}
 
 // ── Plan definitions ──────────────────────────
 export const PLAN_PRICES: Record<string, { monthly: number; name: string; nameAr: string; features: string[] }> = {
@@ -38,6 +91,16 @@ function makeInvoiceNumber(): string {
   const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
   const rand = Math.floor(Math.random() * 9000) + 1000
   return `INV-${yyyymm}-${rand}`
+}
+
+async function activateStorePlanFromInvoice(invoice: { storeId: string; plan: string; periodEnd: Date }) {
+  await prisma.store.update({
+    where: { id: invoice.storeId },
+    data: {
+      plan: invoice.plan as any,
+      planExpiresAt: invoice.periodEnd,
+    },
+  })
 }
 
 export async function billingRoutes(app: FastifyInstance) {
@@ -126,6 +189,8 @@ export async function billingRoutes(app: FastifyInstance) {
     const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000) // 30 days
     const amountBD = planInfo.monthly
 
+    const invoiceStatus = amountBD === 0 ? 'PAID' : paymentRef ? 'PAID' : 'PENDING'
+
     // Create invoice
     const invoice = await prisma.billingInvoice.create({
       data: {
@@ -134,23 +199,26 @@ export async function billingRoutes(app: FastifyInstance) {
         periodStart,
         periodEnd,
         amountBD,
-        status: amountBD === 0 ? 'PAID' : paymentRef ? 'PAID' : 'PENDING',
-        paidAt: amountBD === 0 || paymentRef ? now : null,
+        status: invoiceStatus,
+        paidAt: invoiceStatus === 'PAID' ? now : null,
         paymentRef,
         invoiceNumber: makeInvoiceNumber(),
       },
     })
 
-    // Update store plan
-    await prisma.store.update({
-      where: { id: storeId },
-      data: {
-        plan,
-        planExpiresAt: periodEnd,
-      },
-    })
+    if (invoiceStatus === 'PAID') {
+      await activateStorePlanFromInvoice({ storeId, plan, periodEnd })
+    }
 
-    return reply.send({ message: 'تم ترقية الخطة', plan, planInfo, invoice, expiresAt: periodEnd })
+    return reply.send({
+      message: invoiceStatus === 'PAID' ? 'تم تفعيل الخطة بعد تأكيد الدفع' : 'تم إنشاء فاتورة الترقية والخطة ستُفعّل بعد تأكيد الدفع',
+      plan,
+      planInfo,
+      invoice,
+      expiresAt: invoiceStatus === 'PAID' ? periodEnd : null,
+      activated: invoiceStatus === 'PAID',
+      pendingPayment: invoiceStatus !== 'PAID',
+    })
   })
 
   // ── Get invoices (auth) ───────────────────────
@@ -177,25 +245,31 @@ export async function billingRoutes(app: FastifyInstance) {
   })
 
   // ── Mark invoice paid (auth — admin use or after payment) ──
-  app.patch('/invoices/:invoiceId/pay', { preHandler: authenticate }, async (request, reply) => {
+  app.patch('/invoices/:invoiceId/pay', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const schema = z.object({ paymentRef: z.string().optional() })
     const result = schema.safeParse(request.body)
     if (!result.success) return reply.status(400).send({ error: 'أمر غير صحيح' })
 
-    const merchantId = (request.user as any).id
     const { invoiceId } = request.params as { invoiceId: string }
 
-    const invoice = await prisma.billingInvoice.findUnique({ where: { id: invoiceId }, include: { store: true } })
-    if (!invoice || invoice.store.merchantId !== merchantId) {
+    const invoice = await prisma.billingInvoice.findUnique({ where: { id: invoiceId } })
+    if (!invoice) {
       return reply.status(404).send({ error: 'الفاتورة غير موجودة' })
     }
 
+    const paidAt = new Date()
     const updated = await prisma.billingInvoice.update({
       where: { id: invoiceId },
-      data: { status: 'PAID', paidAt: new Date(), paymentRef: result.data.paymentRef },
+      data: { status: 'PAID', paidAt, paymentRef: result.data.paymentRef ?? invoice.paymentRef },
     })
 
-    return reply.send({ message: 'تم تسجيل الدفع', invoice: updated })
+    await activateStorePlanFromInvoice({
+      storeId: invoice.storeId,
+      plan: invoice.plan,
+      periodEnd: invoice.periodEnd,
+    })
+
+    return reply.send({ message: 'تم تسجيل الدفع وتفعيل الخطة', invoice: updated })
   })
 
   // ── Check if store is active/within plan limits ─
@@ -330,13 +404,37 @@ export async function billingRoutes(app: FastifyInstance) {
 
   // POST Tap webhook callback — update payment status
   app.post('/subscription/tap-callback', async (request, reply) => {
-    const { id: chargeId, status } = request.body as { id?: string; status?: string }
-    if (!chargeId || !status) return reply.status(400).send({ error: 'invalid payload' })
+    const { id: chargeId } = request.body as { id?: string }
+    if (!chargeId) return reply.status(400).send({ error: 'invalid payload' })
 
-    const payment = await prisma.merchantPayment.findFirst({ where: { gatewayRef: chargeId } })
+    const payment = await prisma.merchantPayment.findFirst({
+      where: { gatewayRef: chargeId },
+      include: { store: { include: { settings: true } } },
+    })
     if (!payment) return reply.send({ ok: true }) // ignore unknown
 
-    if (status === 'CAPTURED') {
+    const settings = payment.store.settings
+    if (!settings?.tapSecretKey) {
+      app.log.warn({ chargeId, paymentId: payment.id }, 'Subscription Tap callback ignored because store is missing tap secret')
+      return reply.status(202).send({ ok: true })
+    }
+
+    let verifiedCharge: TapBillingChargeResponse
+    try {
+      verifiedCharge = await fetchTapBillingCharge(chargeId, settings.tapSecretKey)
+    } catch (err) {
+      app.log.error({ err, chargeId, paymentId: payment.id }, 'Subscription Tap verification failed')
+      return reply.status(502).send({ error: 'verification failed' })
+    }
+
+    if (!tapBillingChargeMatchesPayment(verifiedCharge, payment)) {
+      app.log.warn({ chargeId, paymentId: payment.id }, 'Subscription Tap callback verification mismatch')
+      return reply.status(409).send({ error: 'charge mismatch' })
+    }
+
+    const status = getTapBillingStatus(verifiedCharge)
+
+    if (status === 'PAID') {
       await prisma.merchantPayment.update({ where: { id: payment.id }, data: { status: 'PAID', paidAt: new Date() } })
       // Extend plan by 30 days from today or from current expiry
       const store = await prisma.store.findUnique({ where: { id: payment.storeId }, select: { planExpiresAt: true } })
@@ -344,7 +442,7 @@ export async function billingRoutes(app: FastifyInstance) {
       const newExpiry = new Date(base)
       newExpiry.setDate(newExpiry.getDate() + 30)
       await prisma.store.update({ where: { id: payment.storeId }, data: { planExpiresAt: newExpiry, gracePeriodEnds: null, paymentRetryCount: 0 } })
-    } else if (status === 'FAILED' || status === 'CANCELLED') {
+    } else if (status === 'FAILED') {
       await prisma.merchantPayment.update({ where: { id: payment.id }, data: { status: 'FAILED', failedAt: new Date(), retryCount: { increment: 1 } } })
       await prisma.store.update({ where: { id: payment.storeId }, data: { paymentRetryCount: { increment: 1 } } })
     }

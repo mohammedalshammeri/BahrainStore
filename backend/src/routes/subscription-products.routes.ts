@@ -141,9 +141,19 @@ export async function subscriptionProductRoutes(app: FastifyInstance) {
   // GET /subscription-products/customer/:customerId — Customer's subscriptions
   app.get('/customer/:customerId', { preHandler: authenticate }, async (request, reply) => {
     const { customerId } = request.params as { customerId: string }
+    const merchantId = (request.user as any).id
+
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, store: { merchantId } },
+      select: { id: true, storeId: true },
+    })
+
+    if (!customer) {
+      return reply.status(403).send({ error: 'غير مصرح' })
+    }
 
     const subscriptions = await prisma.customerSubscription.findMany({
-      where: { customerId },
+      where: { customerId: customer.id, storeId: customer.storeId },
       include: {
         plan: { include: { product: { select: { name: true, nameAr: true, images: { take: 1 } } } } },
       },

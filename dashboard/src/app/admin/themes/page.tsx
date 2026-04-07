@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import {
   Search, Plus, Layers, CheckCircle2, XCircle, Star, RefreshCw,
-  Pencil, Trash2, X, ShoppingBag, DollarSign, ImageIcon,
+  Pencil, Trash2, X, ShoppingBag, DollarSign, ImageIcon, Upload, Download, FileArchive,
 } from "lucide-react";
 
 interface ThemeItem {
@@ -31,6 +31,9 @@ interface ThemeItem {
   rating: number;
   ratingCount: number;
   createdAt: string;
+  updatedAt: string;
+  version?: string;
+  changelog?: string | null;
   _count: { purchases: number };
 }
 
@@ -50,7 +53,7 @@ interface ThemeStats {
 const EMPTY_FORM = {
   name: "", nameAr: "", slug: "", description: "", descriptionAr: "",
   thumbnailUrl: "", previewUrl: "", demoUrl: "", downloadUrl: "",
-  authorName: "", authorEmail: "", price: "0", isPremium: false, tags: "",
+  authorName: "", authorEmail: "", version: "1.0.0", changelog: "", price: "0", isPremium: false, tags: "",
 };
 
 export default function ThemesPage() {
@@ -62,6 +65,8 @@ export default function ThemesPage() {
   const [modal, setModal] = useState<{ open: boolean; editing: ThemeItem | null }>({ open: false, editing: null });
   const [form, setForm] = useState<typeof EMPTY_FORM>({ ...EMPTY_FORM });
   const [confirmDelete, setConfirmDelete] = useState<ThemeItem | null>(null);
+  const [packageFile, setPackageFile] = useState<File | null>(null);
+  const [packageReport, setPackageReport] = useState<{ slug: string; nameAr: string; assetsCount: number } | null>(null);
 
   const showToast = (msg: string, type: "success" | "error" = "success") => {
     setToast({ msg, type });
@@ -118,6 +123,60 @@ export default function ThemesPage() {
     onError: () => showToast("حدث خطأ", "error"),
   });
 
+  const validatePackage = useMutation({
+    mutationFn: async (file: File) => {
+      const body = new FormData();
+      body.append("file", file);
+      const res = await api.post("/themes/validate-package", body, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return res.data as { manifest: { slug: string; nameAr: string }; assets: Array<{ key: string }> };
+    },
+    onSuccess: (data) => {
+      setPackageReport({ slug: data.manifest.slug, nameAr: data.manifest.nameAr, assetsCount: data.assets.length });
+      showToast(`تم فحص الحزمة: ${data.manifest.nameAr}`);
+    },
+    onError: () => showToast("تعذر فحص الحزمة", "error"),
+  });
+
+  const importPackage = useMutation({
+    mutationFn: async (file: File) => {
+      const body = new FormData();
+      body.append("file", file);
+      const res = await api.post("/admin/themes/import-package", body, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return res.data as { theme: ThemeItem; assetsCount: number };
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["admin-themes"] });
+      qc.invalidateQueries({ queryKey: ["admin-themes-stats"] });
+      setPackageReport({ slug: data.theme.slug, nameAr: data.theme.nameAr, assetsCount: data.assetsCount });
+      setPackageFile(null);
+      showToast(`تم استيراد الحزمة: ${data.theme.nameAr}`);
+    },
+    onError: () => showToast("تعذر استيراد الحزمة", "error"),
+  });
+
+  const exportPackage = useMutation({
+    mutationFn: async ({ id, slug }: { id: string; slug: string }) => {
+      const res = await api.get(`/admin/themes/${id}/export-package`, { responseType: "blob" });
+      return { blob: res.data as Blob, slug };
+    },
+    onSuccess: ({ blob, slug }) => {
+      const url = URL.createObjectURL(new Blob([blob], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${slug}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast("تم تصدير الحزمة");
+    },
+    onError: () => showToast("تعذر تصدير الحزمة", "error"),
+  });
+
   const openCreate = () => {
     setForm({ ...EMPTY_FORM });
     setModal({ open: true, editing: null });
@@ -130,6 +189,7 @@ export default function ThemesPage() {
       thumbnailUrl: theme.thumbnailUrl ?? "", previewUrl: theme.previewUrl ?? "",
       demoUrl: theme.demoUrl ?? "", downloadUrl: theme.downloadUrl ?? "",
       authorName: theme.authorName, authorEmail: theme.authorEmail ?? "",
+      version: theme.version ?? "1.0.0", changelog: theme.changelog ?? "",
       price: String(theme.price), isPremium: theme.isPremium,
       tags: theme.tags.join(", "),
     });
@@ -140,6 +200,7 @@ export default function ThemesPage() {
     const body: any = {
       name: form.name, nameAr: form.nameAr, slug: form.slug,
       authorName: form.authorName, isPremium: form.isPremium,
+      version: form.version,
       price: parseFloat(form.price) || 0,
       tags: form.tags ? form.tags.split(",").map((t) => t.trim()).filter(Boolean) : [],
     };
@@ -150,6 +211,7 @@ export default function ThemesPage() {
     if (form.demoUrl) body.demoUrl = form.demoUrl;
     if (form.downloadUrl) body.downloadUrl = form.downloadUrl;
     if (form.authorEmail) body.authorEmail = form.authorEmail;
+    if (form.changelog) body.changelog = form.changelog;
     saveTheme.mutate(body);
   };
 
@@ -248,6 +310,12 @@ export default function ThemesPage() {
                   className="w-full px-3 py-2 rounded-xl text-sm outline-none resize-none"
                   style={{ background: "#060b18", border: "1px solid #1a2840", color: "#c8ddf0" }} />
               </div>
+              <div className="col-span-2">
+                <label className="block text-[10px] font-semibold mb-1" style={{ color: "#4a6480" }}>سجل التغييرات</label>
+                <textarea rows={4} value={form.changelog} onChange={(e) => setForm((f) => ({ ...f, changelog: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-xl text-sm outline-none resize-none"
+                  style={{ background: "#060b18", border: "1px solid #1a2840", color: "#c8ddf0" }} />
+              </div>
               <div>
                 <label className="block text-[10px] font-semibold mb-1" style={{ color: "#4a6480" }}>السعر (BD)</label>
                 <input type="number" min={0} step={0.001} value={form.price}
@@ -291,6 +359,48 @@ export default function ThemesPage() {
             style={{ background: "rgba(139,92,246,.12)", border: "1px solid rgba(139,92,246,.3)", color: "#a78bfa" }}>
             <Plus className="w-4 h-4" /> إضافة ثيم
           </button>
+        </div>
+
+        <div className="rounded-2xl p-4 space-y-3" style={{ background: "#0c1526", border: "1px solid #1a2840" }}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-sm font-black" style={{ color: "#e2eef8" }}>حزم الثيمات</h2>
+              <p className="text-xs mt-1" style={{ color: "#4a6480" }}>افحص واستورد أو صدّر حزمة الثيم مباشرة من لوحة الإدارة.</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="px-3 py-2 rounded-xl text-xs font-bold cursor-pointer"
+                style={{ background: "rgba(255,255,255,.04)", border: "1px solid #1a2840", color: "#c8ddf0" }}>
+                <input
+                  type="file"
+                  accept=".zip"
+                  className="hidden"
+                  onChange={(e) => setPackageFile(e.target.files?.[0] ?? null)}
+                />
+                <span className="flex items-center gap-2"><FileArchive className="w-3.5 h-3.5" /> {packageFile ? packageFile.name : "اختر ملف zip"}</span>
+              </label>
+              <button
+                onClick={() => packageFile ? validatePackage.mutate(packageFile) : showToast("اختر ملف الحزمة أولاً", "error")}
+                disabled={validatePackage.isPending}
+                className="px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-40"
+                style={{ background: "rgba(96,165,250,.12)", border: "1px solid rgba(96,165,250,.3)", color: "#60a5fa" }}>
+                <span className="flex items-center gap-2"><RefreshCw className={`w-3.5 h-3.5 ${validatePackage.isPending ? "animate-spin" : ""}`} /> فحص الحزمة</span>
+              </button>
+              <button
+                onClick={() => packageFile ? importPackage.mutate(packageFile) : showToast("اختر ملف الحزمة أولاً", "error")}
+                disabled={importPackage.isPending}
+                className="px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-40"
+                style={{ background: "rgba(16,185,129,.12)", border: "1px solid rgba(16,185,129,.3)", color: "#34d399" }}>
+                <span className="flex items-center gap-2"><Upload className="w-3.5 h-3.5" /> {importPackage.isPending ? "جاري الاستيراد" : "استيراد الحزمة"}</span>
+              </button>
+            </div>
+          </div>
+          {packageReport && (
+            <div className="rounded-xl px-4 py-3 text-xs flex items-center justify-between gap-3 flex-wrap"
+              style={{ background: "rgba(139,92,246,.08)", border: "1px solid rgba(139,92,246,.24)", color: "#c8ddf0" }}>
+              <span>آخر حزمة: <strong>{packageReport.nameAr}</strong> ({packageReport.slug})</span>
+              <span>{packageReport.assetsCount} ملفاً داخل الحزمة</span>
+            </div>
+          )}
         </div>
 
         {/* Stats */}
@@ -400,10 +510,14 @@ export default function ThemesPage() {
                   <div>
                     <p className="font-black text-sm" style={{ color: "#e2eef8" }}>{theme.nameAr}</p>
                     <p className="text-[10px]" style={{ color: "#2d4560" }}>{theme.authorName}</p>
+                    <p className="text-[10px] mt-1" style={{ color: "#4a6480" }}>آخر تحديث: {new Date(theme.updatedAt).toLocaleDateString("ar-BH")}</p>
                   </div>
 
                   {/* Price + rating + installs */}
                   <div className="flex items-center gap-3 text-xs">
+                    <span className="rounded-full px-2 py-0.5" style={{ background: "rgba(255,255,255,.05)", color: "#c8ddf0" }}>
+                      v{theme.version || "1.0.0"}
+                    </span>
                     <span className="font-black" style={{ color: theme.price > 0 ? "#fbbf24" : "#34d399" }}>
                       {theme.price > 0 ? `${Number(theme.price).toFixed(3)} BD` : "مجاني"}
                     </span>
@@ -441,6 +555,11 @@ export default function ThemesPage() {
                         {theme.tags[0]}{theme.tags.length > 1 ? ` +${theme.tags.length - 1}` : ""}
                       </span>
                     )}
+                    {theme.changelog && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "rgba(96,165,250,.08)", color: "#60a5fa" }}>
+                        changelog
+                      </span>
+                    )}
                   </div>
 
                   {/* Actions */}
@@ -473,6 +592,13 @@ export default function ThemesPage() {
                       {theme.isFeatured ? "إلغاء التمييز" : "تمييز"}
                     </button>
                     <div className="mr-auto flex gap-1.5">
+                      <button
+                        onClick={() => exportPackage.mutate({ id: theme.id, slug: theme.slug })}
+                        disabled={exportPackage.isPending}
+                        className="p-1.5 rounded-xl disabled:opacity-40"
+                        style={{ background: "rgba(96,165,250,.08)", color: "#60a5fa" }}>
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
                       <button onClick={() => openEdit(theme)}
                         className="p-1.5 rounded-xl" style={{ background: "rgba(255,255,255,.04)", color: "#4a6480" }}>
                         <Pencil className="w-3.5 h-3.5" />

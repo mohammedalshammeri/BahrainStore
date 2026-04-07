@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Resolver } from "react-hook-form";
 import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
+import { getPublicApiUrl } from "@/lib/env";
 import { Header } from "@/components/layout/header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,7 +133,7 @@ export default function SettingsPage() {
     queryKey: ["staff", store?.id],
     queryFn: async () => {
       const res = await api.get(`/staff/${store!.id}`);
-      return res.data;
+      return res.data.staff as StoreStaff[];
     },
     enabled: !!store?.id,
   });
@@ -836,7 +837,7 @@ export default function SettingsPage() {
                         </div>
                         <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-4 py-3 text-xs text-indigo-700">
                           <strong>Webhook URL:</strong>
-                          <span className="block font-mono mt-1 text-[11px] break-all">{process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001"}/api/v1/payment/tap/webhook</span>
+                          <span className="block font-mono mt-1 text-[11px] break-all">{getPublicApiUrl()}/payment/tap/webhook</span>
                         </div>
                       </div>
                     )}

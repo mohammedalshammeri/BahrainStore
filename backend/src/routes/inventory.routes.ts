@@ -21,6 +21,52 @@ const CSV_HEADERS = [
 
 export async function inventoryRoutes(app: FastifyInstance) {
 
+  // ── Adjust single product stock ─────────────────
+  // POST /inventory/adjust  body: { productId, quantity, reason }
+  app.post('/adjust', { preHandler: authenticate }, async (request, reply) => {
+    const schema = z.object({
+      productId: z.string().cuid(),
+      quantity: z.number().int().refine((value) => value !== 0, 'quantity must not be zero'),
+      reason: z.string().trim().max(500).optional().default(''),
+    })
+
+    const result = schema.safeParse(request.body)
+    if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: result.error.flatten() })
+
+    const merchantId = (request.user as any).id
+    const { productId, quantity, reason } = result.data
+
+    const product = await prisma.product.findFirst({
+      where: { id: productId, store: { merchantId } },
+      select: { id: true, storeId: true, stock: true, name: true, nameAr: true },
+    })
+
+    if (!product) return reply.status(404).send({ error: 'المنتج غير موجود' })
+
+    const nextStock = product.stock + quantity
+    if (nextStock < 0) {
+      return reply.status(400).send({ error: 'لا يمكن أن يصبح المخزون أقل من صفر' })
+    }
+
+    const updated = await prisma.product.update({
+      where: { id: productId },
+      data: { stock: nextStock },
+      select: { id: true, stock: true, name: true, nameAr: true },
+    })
+
+    return reply.send({
+      message: 'تم تعديل المخزون',
+      adjustment: {
+        productId,
+        quantity,
+        reason,
+        previousStock: product.stock,
+        currentStock: updated.stock,
+      },
+      product: updated,
+    })
+  })
+
   // ── Export products as CSV ───────────────────
   // GET /inventory/export?storeId=xxx
   app.get('/export', { preHandler: authenticate }, async (request, reply) => {

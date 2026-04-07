@@ -1,8 +1,7 @@
-// ─── API Client — Axios instance with JWT injection ──────────────────────────
-
-import axios, { type AxiosRequestConfig } from 'axios'
+import axios from 'axios'
 import * as SecureStore from 'expo-secure-store'
 import { API_URL, STORAGE_KEYS } from '@/constants'
+import type { NotificationItem } from '@/types'
 
 const api = axios.create({
   baseURL: API_URL,
@@ -10,14 +9,12 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-// Inject token on every request
 api.interceptors.request.use(async (config) => {
   const token = await SecureStore.getItemAsync(STORAGE_KEYS.authToken)
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
-// Handle 401 globally (token expired)
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
@@ -25,7 +22,6 @@ api.interceptors.response.use(
       await SecureStore.deleteItemAsync(STORAGE_KEYS.authToken)
       await SecureStore.deleteItemAsync(STORAGE_KEYS.user)
       await SecureStore.deleteItemAsync(STORAGE_KEYS.currentStoreId)
-      // Dynamic import avoids circular dependency (auth.store imports api)
       const { useAuthStore } = await import('@/store/auth.store')
       useAuthStore.setState({ user: null, token: null, currentStore: null, isAuthenticated: false })
     }
@@ -33,9 +29,108 @@ api.interceptors.response.use(
   }
 )
 
+function unwrapResource<T>(payload: any, key: string): T {
+  return (payload?.[key] ?? payload) as T
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function normalizeAlert(alert: any): NotificationItem {
+  const typeMap: Record<string, NotificationItem['type']> = {
+    LOW_STOCK: 'LOW_STOCK',
+    OUT_OF_STOCK: 'LOW_STOCK',
+    LARGE_ORDER: 'NEW_ORDER',
+    FAILED_PAYMENT: 'PAYMENT',
+    NEW_REVIEW: 'REVIEW',
+    ABANDONED_CART: 'SYSTEM',
+    SEASONAL_REMINDER: 'SYSTEM',
+  }
+
+  return {
+    id: alert.id,
+    type: typeMap[alert.type] ?? 'SYSTEM',
+    title: alert.title,
+    body: alert.message,
+    isRead: alert.isRead,
+    createdAt: alert.createdAt,
+    data: alert.data,
+  }
+}
+
+function normalizeProduct(product: any) {
+  if (!product) return product
+
+  return {
+    ...product,
+    comparePrice: product.comparePrice != null ? Number(product.comparePrice) : undefined,
+    costPrice: product.costPrice != null ? Number(product.costPrice) : undefined,
+    price: Number(product.price ?? 0),
+    stock: Number(product.stock ?? 0),
+    weight: product.weight != null ? Number(product.weight) : undefined,
+    images: Array.isArray(product.images)
+      ? product.images.map((image: any) => typeof image === 'string' ? image : image?.url).filter(Boolean)
+      : [],
+    trackInventory: product.trackInventory ?? product.trackStock ?? true,
+  }
+}
+
+function normalizeProductListPayload(payload: any) {
+  return {
+    ...payload,
+    products: Array.isArray(payload?.products) ? payload.products.map(normalizeProduct) : [],
+  }
+}
+
+function normalizeOrder(order: any) {
+  if (!order) return order
+
+  const customer = order.customer
+    ? {
+        ...order.customer,
+        name: order.customer.name || [order.customer.firstName, order.customer.lastName].filter(Boolean).join(' ').trim() || order.customer.phone || '',
+      }
+    : undefined
+
+  return {
+    ...order,
+    subtotal: order.subtotal != null ? Number(order.subtotal) : undefined,
+    shippingCost: order.shippingCost != null ? Number(order.shippingCost) : undefined,
+    vatAmount: order.vatAmount != null ? Number(order.vatAmount) : undefined,
+    discountAmount: order.discountAmount != null ? Number(order.discountAmount) : order.discount,
+    total: Number(order.total ?? 0),
+    customer,
+    items: Array.isArray(order.items)
+      ? order.items.map((item: any) => ({
+          ...item,
+          productName: item.productName || item.nameAr || item.name || '',
+          unitPrice: item.unitPrice != null ? Number(item.unitPrice) : Number(item.price ?? 0),
+          price: Number(item.price ?? item.unitPrice ?? 0),
+          total: Number(item.total ?? item.totalPrice ?? 0),
+        }))
+      : [],
+  }
+}
+
+function normalizeStore(store: any) {
+  if (!store) return store
+
+  return {
+    ...store,
+    domain: store.domain || store.customDomain || undefined,
+    phone: store.phone || store.settings?.phone || undefined,
+  }
+}
+
 export default api
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
 export const authApi = {
   login: (email: string, password: string) =>
     api.post('/auth/login', { email, password }),
@@ -43,7 +138,6 @@ export const authApi = {
   logout: () => api.post('/auth/logout'),
 }
 
-// ─── Analytics / Dashboard ────────────────────────────────────────────────────
 export const analyticsApi = {
   getDashboard: (storeId: string, period: 'today' | '7d' | '30d' | '90d') =>
     api.get(`/analytics/dashboard?storeId=${storeId}&period=${period}`),
@@ -53,33 +147,61 @@ export const analyticsApi = {
     api.get(`/analytics/top-products?storeId=${storeId}&limit=${limit}`),
 }
 
-// ─── Orders ───────────────────────────────────────────────────────────────────
 export const ordersApi = {
-  list: (storeId: string, params: Record<string, any> = {}) =>
-    api.get('/orders', { params: { storeId, ...params } }),
-  get: (id: string) => api.get(`/orders/${id}`),
+  list: async (storeId: string, params: Record<string, any> = {}) => {
+    const res = await api.get('/orders', { params: { storeId, ...params } })
+    return {
+      ...res,
+      data: {
+        ...res.data,
+        orders: Array.isArray(res.data?.orders) ? res.data.orders.map(normalizeOrder) : [],
+      },
+    }
+  },
+  get: async (id: string) => {
+    const res = await api.get(`/orders/${id}`)
+    return { ...res, data: normalizeOrder(unwrapResource(res.data, 'order')) }
+  },
   updateStatus: (id: string, status: string) =>
-    api.put(`/orders/${id}/status`, { status }),
+    api.patch(`/orders/${id}/status`, { status }),
   addTracking: (id: string, trackingNumber: string, company: string) =>
-    api.put(`/orders/${id}/tracking`, { trackingNumber, company }),
+    api.patch(`/orders/${id}/status`, { trackingNumber, shippingCompany: company }),
   printInvoice: (id: string) => api.get(`/orders/${id}/invoice`),
 }
 
-// ─── Products ─────────────────────────────────────────────────────────────────
 export const productsApi = {
-  list: (storeId: string, params: Record<string, any> = {}) =>
-    api.get('/products', { params: { storeId, ...params } }),
-  get: (id: string) => api.get(`/products/${id}`),
-  create: (data: any) => api.post('/products', data),
-  update: (id: string, data: any) => api.put(`/products/${id}`, data),
+  list: async (storeId: string, params: Record<string, any> = {}) => {
+    const res = await api.get('/products', { params: { storeId, ...params } })
+    return {
+      ...res,
+      data: normalizeProductListPayload(res.data),
+    }
+  },
+  get: async (id: string) => {
+    const res = await api.get(`/products/${id}/merchant`)
+    return { ...res, data: normalizeProduct(unwrapResource(res.data, 'product')) }
+  },
+  create: async (data: any) => {
+    const payload = {
+      ...data,
+      slug: data.slug || slugify(data.name || data.nameAr || `product-${Date.now()}`),
+    }
+    const res = await api.post('/products', payload)
+    return { ...res, data: { ...res.data, product: normalizeProduct(unwrapResource(res.data, 'product')) } }
+  },
+  update: async (id: string, data: any) => {
+    const res = await api.patch(`/products/${id}`, data)
+    return { ...res, data: { ...res.data, product: normalizeProduct(unwrapResource(res.data, 'product')) } }
+  },
   delete: (id: string) => api.delete(`/products/${id}`),
   updateStock: (id: string, stock: number) =>
-    api.put(`/products/${id}/stock`, { stock }),
-  search: (storeId: string, q: string) =>
-    api.get(`/products/search`, { params: { storeId, q, limit: 20 } }),
+    api.patch(`/products/${id}`, { stock }),
+  search: async (storeId: string, q: string) => {
+    const res = await api.get('/products', { params: { storeId, search: q, limit: 20 } })
+    return { ...res, data: normalizeProductListPayload(res.data) }
+  },
 }
 
-// ─── Inventory ────────────────────────────────────────────────────────────────
 export const inventoryApi = {
   getLowStock: (storeId: string, threshold = 10) =>
     api.get(`/inventory/low-stock?storeId=${storeId}&threshold=${threshold}`),
@@ -87,7 +209,6 @@ export const inventoryApi = {
     api.post('/inventory/adjust', { productId, quantity, reason }),
 }
 
-// ─── Customers ────────────────────────────────────────────────────────────────
 export const customersApi = {
   list: (storeId: string, params: Record<string, any> = {}) =>
     api.get('/customers', { params: { storeId, ...params } }),
@@ -96,7 +217,6 @@ export const customersApi = {
     api.get(`/customers/${customerId}/orders?storeId=${storeId}`),
 }
 
-// ─── POS ──────────────────────────────────────────────────────────────────────
 export const posApi = {
   checkout: (data: {
     storeId: string
@@ -107,28 +227,44 @@ export const posApi = {
     cashReceived?: number
   }) => api.post('/pos/checkout', data),
 
-  searchProducts: (storeId: string, q: string) =>
-    api.get(`/pos/products/search?storeId=${storeId}&q=${encodeURIComponent(q)}`),
+  searchProducts: async (storeId: string, q: string) => {
+    const res = await api.get(`/pos/products/search?storeId=${storeId}&q=${encodeURIComponent(q)}`)
+    return { ...res, data: normalizeProductListPayload(res.data) }
+  },
 
-  getByBarcode: (storeId: string, barcode: string) =>
-    api.get(`/pos/products/barcode/${barcode}?storeId=${storeId}`),
+  getByBarcode: async (storeId: string, barcode: string) => {
+    const res = await api.get(`/pos/products/barcode/${barcode}?storeId=${storeId}`)
+    return { ...res, data: { ...res.data, product: normalizeProduct(unwrapResource(res.data, 'product')) } }
+  },
 
   getDailySummary: (storeId: string, date: string) =>
     api.get(`/pos/summary?storeId=${storeId}&date=${date}`),
 }
 
-// ─── Store settings ───────────────────────────────────────────────────────────
 export const storeApi = {
-  get: (id: string) => api.get(`/stores/${id}`),
-  update: (id: string, data: any) => api.put(`/stores/${id}`, data),
+  get: async (id: string) => {
+    const res = await api.get(`/stores/${id}`)
+    return { ...res, data: normalizeStore(unwrapResource(res.data, 'store')) }
+  },
+  update: async (id: string, data: any) => {
+    const res = await api.patch(`/stores/${id}`, data)
+    return { ...res, data: normalizeStore(unwrapResource(res.data, 'store')) }
+  },
   getStats: (id: string) => api.get(`/stores/${id}/stats`),
 }
 
-// ─── Notifications ─────────────────────────────────────────────────────────────
 export const notificationsApi = {
-  list: (storeId: string) => api.get(`/notifications?storeId=${storeId}`),
-  markRead: (id: string) => api.put(`/notifications/${id}/read`),
-  markAllRead: (storeId: string) => api.put(`/notifications/read-all`, { storeId }),
-  registerToken: (token: string, storeId: string) =>
-    api.post('/push/register', { token, storeId }),
+  list: async (storeId: string) => {
+    const res = await api.get('/alerts', { params: { storeId } })
+    return { ...res, data: { notifications: (res.data?.alerts || []).map(normalizeAlert) } }
+  },
+  markRead: (id: string) => api.patch(`/alerts/${id}/read`),
+  markAllRead: (storeId: string) => api.post('/alerts/read-all', { storeId }),
+  registerToken: (token: string, storeId: string) => {
+    if (!token || !storeId || /^ExponentPushToken|^ExpoPushToken/.test(token)) {
+      return Promise.resolve({ data: { success: false, reason: 'mobile-push-not-configured' } })
+    }
+
+    return api.post('/push/register', { token, storeId })
+  },
 }

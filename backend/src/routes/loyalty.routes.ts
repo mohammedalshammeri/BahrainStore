@@ -67,46 +67,65 @@ export async function loyaltyRoutes(app: FastifyInstance) {
   })
 
   // ── Get Loyalty Transactions ───────────────────
-  app.get('/transactions', async (request, reply) => {
-    const { customerId, storeId, page = '1', limit = '20' } =
-      request.query as Record<string, string>
-    if (!customerId || !storeId) return reply.status(400).send({ error: 'customerId و storeId مطلوبان' })
+  app.get('/transactions', { preHandler: authenticate }, async (request, reply) => {
+    const merchantId = (request.user as any).id
+    const { customerId, storeId, page = '1', limit = '20' } = request.query as Record<string, string>
+    if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
-    const skip = (parseInt(page) - 1) * parseInt(limit)
+    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { id: true } })
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    if (customerId) {
+      const customer = await prisma.customer.findFirst({ where: { id: customerId, storeId }, select: { id: true } })
+      if (!customer) return reply.status(404).send({ error: 'العميل غير موجود' })
+    }
+
+    const currentPage = Math.max(1, Number.parseInt(page, 10) || 1)
+    const take = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20))
+    const skip = (currentPage - 1) * take
+    const where = customerId ? { customerId, storeId } : { storeId }
+
     const [transactions, total] = await Promise.all([
       prisma.loyaltyTransaction.findMany({
-        where: { customerId, storeId },
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
-        take: parseInt(limit),
+        take,
       }),
-      prisma.loyaltyTransaction.count({ where: { customerId, storeId } }),
+      prisma.loyaltyTransaction.count({ where }),
     ])
 
-    return reply.send({ transactions, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) })
+    return reply.send({ transactions, total, page: currentPage, pages: Math.ceil(total / take) })
   })
 
   // ── Earn Points (called after order is PAID) ───
   // POST /loyalty/earn { customerId, storeId, orderId, orderAmount }
-  app.post('/earn', async (request, reply) => {
+  app.post('/earn', { preHandler: authenticate }, async (request, reply) => {
     const schema = z.object({
       customerId: z.string().cuid(),
       storeId: z.string().cuid(),
       orderId: z.string().cuid(),
-      orderAmount: z.number().positive(), // BHD amount
     })
     const result = schema.safeParse(request.body)
     if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
-    const { customerId, storeId, orderId, orderAmount } = result.data
+    const merchantId = (request.user as any).id
+    const { customerId, storeId, orderId } = result.data
 
-    const [customer, settings] = await Promise.all([
+    const [store, customer, settings, order] = await Promise.all([
+      prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { id: true } }),
       prisma.customer.findFirst({ where: { id: customerId, storeId } }),
       prisma.storeSettings.findUnique({ where: { storeId } }),
+      prisma.order.findFirst({ where: { id: orderId, storeId, customerId }, select: { id: true, total: true, paymentStatus: true } }),
     ])
 
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
     if (!customer) return reply.status(404).send({ error: 'العميل غير موجود' })
+    if (!order) return reply.status(404).send({ error: 'الطلب غير موجود لهذا العميل في هذا المتجر' })
     if (!settings?.loyaltyEnabled) return reply.send({ message: 'برنامج الولاء غير مفعّل', earned: 0 })
+    if (order.paymentStatus !== 'PAID') {
+      return reply.status(400).send({ error: 'لا يمكن احتساب نقاط الولاء قبل تأكيد دفع الطلب' })
+    }
 
     // Check if points already earned for this order
     const existing = await prisma.loyaltyTransaction.findFirst({
@@ -114,7 +133,7 @@ export async function loyaltyRoutes(app: FastifyInstance) {
     })
     if (existing) return reply.send({ message: 'تم احتساب النقاط مسبقاً', earned: 0 })
 
-    const earned = Math.floor(orderAmount * (settings.loyaltyPointsPerBD ?? 10))
+    const earned = Math.floor(Number(order.total) * (settings.loyaltyPointsPerBD ?? 10))
     if (earned <= 0) return reply.send({ earned: 0 })
 
     const [tx] = await prisma.$transaction([
@@ -137,7 +156,7 @@ export async function loyaltyRoutes(app: FastifyInstance) {
 
   // ── Redeem Points (at checkout) ────────────────
   // POST /loyalty/redeem { customerId, storeId, orderId, pointsToRedeem }
-  app.post('/redeem', async (request, reply) => {
+  app.post('/redeem', { preHandler: authenticate }, async (request, reply) => {
     const schema = z.object({
       customerId: z.string().cuid(),
       storeId: z.string().cuid(),
@@ -147,14 +166,19 @@ export async function loyaltyRoutes(app: FastifyInstance) {
     const result = schema.safeParse(request.body)
     if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
+    const merchantId = (request.user as any).id
     const { customerId, storeId, orderId, pointsToRedeem } = result.data
 
-    const [customer, settings] = await Promise.all([
+    const [store, customer, settings, order] = await Promise.all([
+      prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { id: true } }),
       prisma.customer.findFirst({ where: { id: customerId, storeId } }),
       prisma.storeSettings.findUnique({ where: { storeId } }),
+      prisma.order.findFirst({ where: { id: orderId, storeId, customerId }, select: { id: true, total: true } }),
     ])
 
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
     if (!customer) return reply.status(404).send({ error: 'العميل غير موجود' })
+    if (!order) return reply.status(404).send({ error: 'الطلب غير موجود لهذا العميل في هذا المتجر' })
     if (!settings?.loyaltyEnabled) return reply.status(400).send({ error: 'برنامج الولاء غير مفعّل' })
     if (customer.loyaltyPoints < (settings.loyaltyMinRedeem ?? 100)) {
       return reply.status(400).send({ error: `تحتاج على الأقل ${settings.loyaltyMinRedeem} نقطة لاستخدامها` })
@@ -163,7 +187,22 @@ export async function loyaltyRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'رصيد النقاط غير كافٍ' })
     }
 
+    const existingRedeem = await prisma.loyaltyTransaction.findFirst({
+      where: { orderId, storeId, type: 'REDEEMED' },
+      select: { id: true },
+    })
+    if (existingRedeem) {
+      return reply.status(400).send({ error: 'تم استخدام نقاط الولاء لهذا الطلب مسبقاً' })
+    }
+
     const discountBD = (pointsToRedeem * Number(settings.loyaltyBDPerPoint ?? 0.01))
+    const maxDiscountBD = Number(order.total) * ((settings.loyaltyMaxRedeemPct ?? 20) / 100)
+
+    if (discountBD > maxDiscountBD) {
+      return reply.status(400).send({
+        error: `الحد الأقصى المسموح لاستبدال النقاط لهذا الطلب هو ${maxDiscountBD.toFixed(3)} د.ب`,
+      })
+    }
 
     const [tx] = await prisma.$transaction([
       prisma.loyaltyTransaction.create({

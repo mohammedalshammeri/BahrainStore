@@ -5,7 +5,7 @@ import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
 import {
   MessageSquare, Settings, Send, Users, ShoppingCart, RefreshCw,
-  Copy, CheckCircle, Loader2, Eye, EyeOff, Radio, Wifi
+  Copy, CheckCircle, Loader2, Eye, EyeOff, Radio, Wifi, AlertTriangle
 } from "lucide-react";
 
 interface Stats {
@@ -28,6 +28,28 @@ interface Config {
   verifyToken?: string;
   isActive: boolean;
 }
+
+interface Readiness {
+  status: "enabled" | "degraded" | "unavailable";
+  issues: string[];
+  operationalLimits: {
+    broadcastMaxRecipients: number;
+    activeSessionWindowHours: number;
+    recipientFreshnessDays: number;
+  };
+  stats: {
+    totalSessions: number;
+    activeSessions: number;
+    activeCartsCount: number;
+    staleSessions: number;
+  };
+}
+
+const readinessStyles: Record<Readiness["status"], string> = {
+  enabled: "bg-emerald-100 text-emerald-700",
+  degraded: "bg-amber-100 text-amber-700",
+  unavailable: "bg-rose-100 text-rose-700",
+};
 
 const stateLabels: Record<string, { label: string; color: string }> = {
   GREETING:     { label: "ترحيب", color: "bg-slate-100 text-slate-600" },
@@ -55,6 +77,7 @@ export default function WhatsappCommercePage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [config, setConfig] = useState<Config>({ isActive: false });
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Config form state
@@ -65,7 +88,9 @@ export default function WhatsappCommercePage() {
   // Broadcast state
   const [broadcastMsg, setBroadcastMsg] = useState("");
   const [broadcasting, setBroadcasting] = useState(false);
-  const [broadcastResult, setBroadcastResult] = useState<{ sent: number; failed: number } | null>(null);
+  const [broadcastResult, setBroadcastResult] = useState<{ sent: number; failed: number; attempted?: number; truncated?: boolean; total?: number } | null>(null);
+  const [testPhone, setTestPhone] = useState("");
+  const [testing, setTesting] = useState(false);
 
   // Webhook URL copy
   const [copied, setCopied] = useState(false);
@@ -75,14 +100,16 @@ export default function WhatsappCommercePage() {
     if (!store) return;
     setLoading(true);
     try {
-      const [statsRes, sessionsRes, cfgRes] = await Promise.all([
+      const [statsRes, sessionsRes, cfgRes, readinessRes] = await Promise.all([
         api.get(`/whatsapp-commerce/stats?storeId=${store.id}`),
         api.get(`/whatsapp-commerce/sessions?storeId=${store.id}`),
         api.get(`/whatsapp-commerce/config?storeId=${store.id}`),
+        api.get(`/whatsapp-commerce/readiness?storeId=${store.id}`),
       ]);
       setStats(statsRes.data);
       setSessions(sessionsRes.data.sessions || []);
       const c = cfgRes.data.config || {};
+      setReadiness(readinessRes.data || null);
       setConfig(c);
       setCfgForm({
         phoneNumberId: c.phoneNumberId || "",
@@ -108,6 +135,18 @@ export default function WhatsappCommercePage() {
       alert(err?.response?.data?.error || "فشل الحفظ");
     }
     setSavingCfg(false);
+  };
+
+  const sendTestMessage = async () => {
+    if (!store || !testPhone.trim()) return;
+    setTesting(true);
+    try {
+      await api.post("/whatsapp-commerce/test-message", { storeId: store.id, phone: testPhone.trim() });
+      alert("✅ تم إرسال رسالة الاختبار");
+    } catch (err: any) {
+      alert(err?.response?.data?.error || "فشل إرسال رسالة الاختبار");
+    }
+    setTesting(false);
   };
 
   const sendBroadcast = async () => {
@@ -190,6 +229,46 @@ export default function WhatsappCommercePage() {
       {/* Overview tab */}
       {tab === "overview" && (
         <div className="space-y-6">
+          {readiness && (
+            <div className="bg-white rounded-2xl border p-5 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="font-semibold text-slate-900">جاهزية القناة</h2>
+                  <p className="text-sm text-slate-500 mt-1">حالة التشغيل الحقيقية وحدود الإرسال الحالية.</p>
+                </div>
+                <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${readinessStyles[readiness.status]}`}>
+                  {readiness.status === "enabled" ? "جاهز" : readiness.status === "degraded" ? "متدهور" : "غير متاح"}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">حد الإرسال الجماعي</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">{readiness.operationalLimits.broadcastMaxRecipients}</p>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">نافذة النشاط</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">{readiness.operationalLimits.activeSessionWindowHours} ساعة</p>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">الجلسات القديمة</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">{readiness.stats.staleSessions}</p>
+                </div>
+              </div>
+
+              {readiness.issues.length > 0 && (
+                <div className="space-y-2">
+                  {readiness.issues.map((issue) => (
+                    <div key={issue} className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
+                      <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                      <p>{issue}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-3 gap-4">
             {[
               { label: "إجمالي المحادثات", value: stats?.totalSessions ?? 0, icon: Users, color: "bg-blue-50 text-blue-600" },
@@ -216,6 +295,29 @@ export default function WhatsappCommercePage() {
               <code className="text-xs text-slate-700 flex-1 break-all">{webhookUrl}</code>
               <button onClick={copyWebhook} className="shrink-0 p-1.5 hover:bg-slate-200 rounded-lg transition-colors">
                 {copied ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4 text-slate-500" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border p-6 space-y-4">
+            <div>
+              <h2 className="font-semibold text-slate-900">اختبار الاتصال</h2>
+              <p className="text-xs text-slate-500 mt-1">أرسل رسالة اختبار للتأكد من صحة Phone Number ID والتوكن.</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                value={testPhone}
+                onChange={(e) => setTestPhone(e.target.value)}
+                placeholder="9733XXXXXXX"
+                className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <button
+                onClick={sendTestMessage}
+                disabled={testing || !testPhone.trim()}
+                className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-medium hover:bg-slate-800 disabled:opacity-50"
+              >
+                {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                إرسال اختبار
               </button>
             </div>
           </div>
@@ -396,6 +498,7 @@ export default function WhatsappCommercePage() {
               <p className="text-sm text-green-700">
                 تم الإرسال: <strong>{broadcastResult.sent}</strong> رسالة
                 {broadcastResult.failed > 0 && ` | فشل: ${broadcastResult.failed}`}
+                {broadcastResult.truncated && ` | تم تقليص القائمة إلى ${broadcastResult.attempted}`}
               </p>
             </div>
           )}

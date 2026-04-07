@@ -5,10 +5,10 @@ import { api } from "@/lib/api";
 import { formatBHD, formatDate } from "@/lib/utils";
 import Link from "next/link";
 import Image from "next/image";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import {
   Package, CheckCircle, Truck, Clock, XCircle,
-  MapPin, ChevronRight, AlertCircle, ShoppingBag,
+  ChevronRight, AlertCircle, ShoppingBag,
 } from "lucide-react";
 
 const STATUS_MAP: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
@@ -25,15 +25,17 @@ const STEPS = ["PENDING", "CONFIRMED", "PROCESSING", "SHIPPED", "DELIVERED"];
 
 export default function OrderTrackingPage() {
   const params = useParams() as { subdomain: string; orderNumber: string };
+  const searchParams = useSearchParams();
   const { subdomain, orderNumber } = params;
+  const trackingToken = searchParams.get("token");
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["order-track", orderNumber],
+    queryKey: ["order-track", orderNumber, trackingToken],
     queryFn: async () => {
-      const res = await api.get(`/orders/track/${orderNumber}`);
+      const res = await api.get(`/orders/track/${orderNumber}?token=${encodeURIComponent(trackingToken ?? "")}`);
       return res.data.order;
     },
-    enabled: !!orderNumber,
+    enabled: !!orderNumber && !!trackingToken,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       // Stop polling once order is in a terminal state
@@ -58,8 +60,8 @@ export default function OrderTrackingPage() {
     return (
       <div className="max-w-md mx-auto px-4 py-20 text-center">
         <AlertCircle className="w-16 h-16 mx-auto text-gray-200 mb-4" />
-        <h1 className="text-xl font-bold text-gray-800 mb-2">الطلب غير موجود</h1>
-        <p className="text-gray-500 mb-6">تحقق من رقم الطلب وحاول مرة أخرى</p>
+        <h1 className="text-xl font-bold text-gray-800 mb-2">رابط التتبع غير صالح</h1>
+        <p className="text-gray-500 mb-6">الرابط مفقود أو منتهي الصلاحية أو لا يخص هذا الطلب</p>
         <Link href={`/${subdomain}`} className="text-blue-600 hover:underline">العودة للمتجر</Link>
       </div>
     );
@@ -84,7 +86,7 @@ export default function OrderTrackingPage() {
           <div>
             <h1 className="text-lg font-bold text-gray-900">طلب رقم: {data.orderNumber}</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              {formatDate(data.createdAt)} — {data.customer?.firstName} {data.customer?.lastName}
+              {formatDate(data.createdAt)}
             </p>
           </div>
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-medium ${statusInfo.color}`}>
@@ -178,22 +180,6 @@ export default function OrderTrackingPage() {
           </div>
         </div>
       </div>
-
-      {/* Address */}
-      {data.address && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-5">
-          <h2 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
-            <MapPin className="w-4 h-4" /> عنوان التوصيل
-          </h2>
-          <p className="text-sm text-gray-700">
-            {data.address.area}
-            {data.address.block && ` — بلوك ${data.address.block}`}
-            {data.address.road && `، شارع ${data.address.road}`}
-            {data.address.building && `، مبنى ${data.address.building}`}
-            {data.address.flat && `، شقة ${data.address.flat}`}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

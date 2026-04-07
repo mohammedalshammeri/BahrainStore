@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { CouponType } from '@prisma/client'
+import { findMerchantFlashSale, findMerchantStore } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 export async function flashSalesRoutes(app: FastifyInstance) {
@@ -11,7 +12,7 @@ export async function flashSalesRoutes(app: FastifyInstance) {
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
     const merchantId = (request.user as any).id
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const sales = await prisma.flashSale.findMany({
@@ -34,14 +35,14 @@ export async function flashSalesRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
+    const ownedSale = await findMerchantFlashSale(merchantId, id)
+    if (!ownedSale) return reply.status(404).send({ error: 'العرض غير موجود' })
+
     const sale = await prisma.flashSale.findUnique({
       where: { id },
       include: { items: { include: { product: { select: { id: true, name: true, nameAr: true, slug: true, price: true, images: { take: 1 } } } } } },
     })
     if (!sale) return reply.status(404).send({ error: 'العرض غير موجود' })
-
-    const store = await prisma.store.findFirst({ where: { id: sale.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     return reply.send({ sale })
   })
@@ -65,7 +66,7 @@ export async function flashSalesRoutes(app: FastifyInstance) {
     const merchantId = (request.user as any).id
     const { storeId, productIds, discountValue, startsAt, endsAt, ...data } = result.data
 
-    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
+    const store = await findMerchantStore(merchantId, storeId)
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     if (new Date(endsAt) <= new Date(startsAt)) {
@@ -106,11 +107,8 @@ export async function flashSalesRoutes(app: FastifyInstance) {
     if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
 
     const merchantId = (request.user as any).id
-    const existing = await prisma.flashSale.findUnique({ where: { id } })
+    const existing = await findMerchantFlashSale(merchantId, id)
     if (!existing) return reply.status(404).send({ error: 'العرض غير موجود' })
-
-    const store = await prisma.store.findFirst({ where: { id: existing.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const { productIds, startsAt, endsAt, discountValue, ...rest } = result.data
     const updateData: any = { ...rest }
@@ -137,11 +135,8 @@ export async function flashSalesRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const merchantId = (request.user as any).id
 
-    const existing = await prisma.flashSale.findUnique({ where: { id } })
+    const existing = await findMerchantFlashSale(merchantId, id)
     if (!existing) return reply.status(404).send({ error: 'العرض غير موجود' })
-
-    const store = await prisma.store.findFirst({ where: { id: existing.storeId, merchantId } })
-    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     await prisma.flashSale.delete({ where: { id } })
     return reply.send({ message: 'تم حذف العرض' })

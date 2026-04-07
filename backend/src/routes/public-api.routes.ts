@@ -7,6 +7,39 @@ import { prisma } from '../lib/prisma'
  * Base prefix: /api/public/v1
  */
 
+const PUBLIC_API_CONTRACT = {
+  platform: 'Bazar',
+  version: 'v1',
+  auth: {
+    type: 'apiKey' as const,
+    header: 'x-api-key',
+    docs: '/docs',
+  },
+  resources: {
+    info: 'GET /',
+    contract: 'GET /contract',
+    store: 'GET /store',
+    products: 'GET /products',
+    product: 'GET /products/:slug',
+    categories: 'GET /categories',
+    orders: 'GET /orders',
+    order: 'GET /orders/:orderNumber',
+    createOrder: 'POST /orders',
+    customers: 'GET /customers',
+    customer: 'GET /customers/:phone',
+    upsertCustomer: 'POST /customers',
+    coupons: 'POST /coupons/validate',
+    inventory: 'GET /inventory/stock',
+    changelog: 'GET /changelog',
+  },
+  webhookSupport: {
+    docs: '/api/v1/webhooks/contract',
+    signatureHeader: 'X-Bazar-Signature',
+    deliveryHeader: 'X-Bazar-Delivery',
+  },
+  sdks: ['javascript', 'python', 'php'],
+} as const
+
 async function resolveApiKey(request: any, reply: any): Promise<string | null> {
   const apiKey = request.headers['x-api-key'] as string | undefined
   if (!apiKey) {
@@ -63,17 +96,26 @@ export async function publicApiRoutes(app: FastifyInstance) {
     },
   }, async (_req, reply) => {
     return reply.send({
-      platform: 'Bazar',
-      version: 'v1',
-      docs: '/docs',
-      endpoints: {
-        store: 'GET /store',
-        products: 'GET /products',
-        product: 'GET /products/:slug',
-        categories: 'GET /categories',
-        orders: 'POST /orders  |  GET /orders/:orderNumber',
-        customers: 'POST /customers  |  GET /customers/:phone',
-      },
+      ...PUBLIC_API_CONTRACT,
+    })
+  })
+
+  app.get('/contract', {
+    schema: {
+      tags: ['Info'],
+      summary: 'API contract',
+      description: 'Return the explicit contract for supported public API resources',
+    },
+  }, async (_req, reply) => {
+    const latestChangelog = await prisma.apiChangelog.findFirst({
+      where: { isPublished: true },
+      orderBy: { publishedAt: 'desc' },
+      select: { version: true, title: true, publishedAt: true },
+    })
+
+    return reply.send({
+      ...PUBLIC_API_CONTRACT,
+      latestChangelog,
     })
   })
 
@@ -202,6 +244,54 @@ export async function publicApiRoutes(app: FastifyInstance) {
       orderBy: { sortOrder: 'asc' },
     })
     return reply.send({ categories })
+  })
+
+  app.get('/orders', {
+    schema: {
+      tags: ['Orders'],
+      summary: 'List store orders',
+      headers: { type: 'object', properties: { 'x-api-key': { type: 'string' } }, required: ['x-api-key'] },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', default: 1 },
+          limit: { type: 'integer', default: 20, maximum: 100 },
+          status: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const storeId = await resolveApiKey(request, reply)
+    if (!storeId) return
+
+    const { page = 1, limit = 20, status } = request.query as Record<string, any>
+    const take = Math.min(Number(limit) || 20, 100)
+    const skip = (Math.max(Number(page) || 1, 1) - 1) * take
+
+    const where: Record<string, unknown> = { storeId }
+    if (status) where.status = status
+
+    const [orders, total] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        select: {
+          id: true,
+          orderNumber: true,
+          status: true,
+          paymentStatus: true,
+          paymentMethod: true,
+          total: true,
+          createdAt: true,
+          customer: { select: { firstName: true, lastName: true, phone: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      prisma.order.count({ where }),
+    ])
+
+    return reply.send({ orders, total, page: Math.max(Number(page) || 1, 1), pages: Math.ceil(total / take) })
   })
 
   // ── Create order ─────────────────────────────
@@ -350,6 +440,62 @@ export async function publicApiRoutes(app: FastifyInstance) {
     return reply.send({ customer: { id: customer.id, phone: customer.phone, firstName: customer.firstName } })
   })
 
+  app.get('/customers', {
+    schema: {
+      tags: ['Customers'],
+      summary: 'List customers',
+      headers: { type: 'object', properties: { 'x-api-key': { type: 'string' } }, required: ['x-api-key'] },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', default: 1 },
+          limit: { type: 'integer', default: 20, maximum: 100 },
+          search: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const storeId = await resolveApiKey(request, reply)
+    if (!storeId) return
+
+    const { page = 1, limit = 20, search } = request.query as Record<string, any>
+    const take = Math.min(Number(limit) || 20, 100)
+    const skip = (Math.max(Number(page) || 1, 1) - 1) * take
+
+    const where: any = { storeId }
+    if (search) {
+      where.OR = [
+        { firstName: { contains: String(search), mode: 'insensitive' } },
+        { lastName: { contains: String(search), mode: 'insensitive' } },
+        { phone: { contains: String(search), mode: 'insensitive' } },
+        { email: { contains: String(search), mode: 'insensitive' } },
+      ]
+    }
+
+    const [customers, total] = await Promise.all([
+      prisma.customer.findMany({
+        where,
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          email: true,
+          loyaltyPoints: true,
+          totalOrders: true,
+          totalSpent: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      prisma.customer.count({ where }),
+    ])
+
+    return reply.send({ customers, total, page: Math.max(Number(page) || 1, 1), pages: Math.ceil(total / take) })
+  })
+
   // ── Get customer by phone ────────────────────
   app.get('/customers/:phone', {
     schema: {
@@ -378,6 +524,105 @@ export async function publicApiRoutes(app: FastifyInstance) {
     })
     if (!customer) return reply.status(404).send({ error: 'العميل غير موجود' })
     return reply.send({ customer })
+  })
+
+  app.post('/coupons/validate', {
+    schema: {
+      tags: ['Coupons'],
+      summary: 'Validate a coupon code',
+      headers: { type: 'object', properties: { 'x-api-key': { type: 'string' } }, required: ['x-api-key'] },
+      body: {
+        type: 'object',
+        required: ['code', 'orderValue'],
+        properties: {
+          code: { type: 'string' },
+          orderValue: { type: 'number' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const storeId = await resolveApiKey(request, reply)
+    if (!storeId) return
+
+    const { code, orderValue } = request.body as { code: string; orderValue: number }
+
+    const coupon = await prisma.coupon.findUnique({
+      where: { storeId_code: { storeId, code: code.toUpperCase() } },
+    })
+
+    if (!coupon || !coupon.isActive) return reply.status(400).send({ valid: false, error: 'كود الخصم غير صحيح' })
+    if (coupon.expiresAt && coupon.expiresAt < new Date()) return reply.status(400).send({ valid: false, error: 'كود الخصم منتهي الصلاحية' })
+    if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) return reply.status(400).send({ valid: false, error: 'كود الخصم نفد' })
+    if (coupon.minOrderValue && orderValue < Number(coupon.minOrderValue)) {
+      return reply.status(400).send({ valid: false, error: `الحد الأدنى ${coupon.minOrderValue} BHD` })
+    }
+
+    const discountAmount = coupon.type === 'PERCENTAGE'
+      ? (orderValue * Number(coupon.value)) / 100
+      : Number(coupon.value)
+
+    return reply.send({ valid: true, coupon, discountAmount })
+  })
+
+  app.get('/inventory/stock', {
+    schema: {
+      tags: ['Inventory'],
+      summary: 'Get product stock snapshot',
+      headers: { type: 'object', properties: { 'x-api-key': { type: 'string' } }, required: ['x-api-key'] },
+      querystring: {
+        type: 'object',
+        required: ['productId'],
+        properties: {
+          productId: { type: 'string' },
+          variantId: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const storeId = await resolveApiKey(request, reply)
+    if (!storeId) return
+
+    const { productId, variantId } = request.query as { productId: string; variantId?: string }
+    const product = await prisma.product.findFirst({
+      where: { id: productId, storeId },
+      include: {
+        variants: {
+          select: {
+            id: true,
+            sku: true,
+            stock: true,
+            price: true,
+          },
+        },
+      },
+    })
+
+    if (!product) return reply.status(404).send({ error: 'المنتج غير موجود' })
+
+    if (variantId) {
+      const variant = product.variants.find((item) => item.id === variantId)
+      if (!variant) return reply.status(404).send({ error: 'النسخة غير موجودة' })
+
+      return reply.send({
+        inventory: {
+          productId: product.id,
+          variantId: variant.id,
+          sku: variant.sku,
+          stock: variant.stock,
+          trackInventory: product.trackInventory,
+        },
+      })
+    }
+
+    return reply.send({
+      inventory: {
+        productId: product.id,
+        sku: product.sku,
+        stock: product.stock,
+        trackInventory: product.trackInventory,
+        variants: product.variants,
+      },
+    })
   })
 
   // ── Public changelog (no auth required) ──────

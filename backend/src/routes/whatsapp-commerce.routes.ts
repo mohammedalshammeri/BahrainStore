@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { findMerchantStore, findMerchantWhatsappConfig } from '../lib/merchant-ownership'
 import { authenticate } from '../middleware/auth.middleware'
 
 // ─── WhatsApp Commerce Bot ────────────────────────────────────────────────────
@@ -8,6 +9,59 @@ import { authenticate } from '../middleware/auth.middleware'
 // State machine: GREETING → BROWSING → PRODUCT_VIEW → CART → CHECKOUT → PAYMENT → DONE
 
 const WA_API_VERSION = 'v18.0'
+const WHATSAPP_BROADCAST_MAX_RECIPIENTS = 100
+const WHATSAPP_ACTIVE_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000
+const WHATSAPP_RECIPIENT_FRESHNESS_WINDOW_MS = 90 * 24 * 60 * 60 * 1000
+
+function normalizeWhatsappPhone(phone: string): string | null {
+  const digits = phone.replace(/\D/g, '')
+  if (!digits) return null
+  return digits.startsWith('973') ? digits : `973${digits}`
+}
+
+function buildWhatsappReadiness(config: {
+  phoneNumberId?: string | null
+  verifyToken?: string | null
+  isActive?: boolean | null
+} | null, stats: { totalSessions: number; activeSessions: number; activeCartsCount: number; staleSessions: number }) {
+  const issues: string[] = []
+  let status: 'enabled' | 'degraded' | 'unavailable' = 'enabled'
+
+  if (!config) {
+    status = 'unavailable'
+    issues.push('لم يتم إعداد WhatsApp Commerce لهذا المتجر بعد.')
+  } else {
+    if (!config.isActive) {
+      status = 'unavailable'
+      issues.push('الإعدادات محفوظة لكن الخدمة غير مفعّلة حالياً.')
+    }
+
+    if (!config.phoneNumberId) {
+      status = 'unavailable'
+      issues.push('Phone Number ID مفقود من الإعدادات.')
+    }
+
+    if (!config.verifyToken) {
+      status = 'unavailable'
+      issues.push('Verify Token مفقود من الإعدادات.')
+    }
+  }
+
+  if (status === 'enabled' && stats.totalSessions > 0 && stats.staleSessions >= Math.max(10, Math.ceil(stats.totalSessions * 0.6))) {
+    status = 'degraded'
+    issues.push('معظم الجلسات قديمة وغير نشطة؛ يلزم تنشيط العملاء أو تنظيف الاستهداف.')
+  }
+
+  return {
+    status,
+    issues,
+    operationalLimits: {
+      broadcastMaxRecipients: WHATSAPP_BROADCAST_MAX_RECIPIENTS,
+      activeSessionWindowHours: 24,
+      recipientFreshnessDays: 90,
+    },
+  }
+}
 
 // ─── Helper: send WhatsApp message ───────────────────────────────────────────
 async function sendWAMessage(
@@ -17,8 +71,8 @@ async function sendWAMessage(
   content: any,
 ): Promise<boolean> {
   try {
-    const phone = to.replace(/\D/g, '')
-    const fullPhone = phone.startsWith('973') ? phone : `973${phone}`
+    const fullPhone = normalizeWhatsappPhone(to)
+    if (!fullPhone) return false
     const res = await fetch(`https://graph.facebook.com/${WA_API_VERSION}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
@@ -423,11 +477,42 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
     const { storeId } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
-    const config = await prisma.whatsappCommerceConfig.findUnique({
-      where: { storeId },
-      select: { id: true, storeId: true, phoneNumberId: true, isActive: true, welcomeMessage: true, createdAt: true },
-    })
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const config = await findMerchantWhatsappConfig(merchantId, storeId)
     return reply.send({ config })
+  })
+
+  app.get('/readiness', { preHandler: authenticate }, async (request, reply) => {
+    const { storeId } = request.query as any
+    if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
+
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const [config, totalSessions, activeSessions, activeCartsCount, staleSessions] = await Promise.all([
+      prisma.whatsappCommerceConfig.findUnique({
+        where: { storeId },
+        select: { phoneNumberId: true, verifyToken: true, isActive: true, updatedAt: true },
+      }),
+      prisma.whatsappCommerceSession.count({ where: { storeId } }),
+      prisma.whatsappCommerceSession.count({
+        where: { storeId, lastMessageAt: { gte: new Date(Date.now() - WHATSAPP_ACTIVE_SESSION_WINDOW_MS) } },
+      }),
+      prisma.whatsappCommerceSession.count({ where: { storeId, state: 'CART' } }),
+      prisma.whatsappCommerceSession.count({
+        where: { storeId, lastMessageAt: { lt: new Date(Date.now() - WHATSAPP_RECIPIENT_FRESHNESS_WINDOW_MS) } },
+      }),
+    ])
+
+    return reply.send({
+      ...buildWhatsappReadiness(config, { totalSessions, activeSessions, activeCartsCount, staleSessions }),
+      stats: { totalSessions, activeSessions, activeCartsCount, staleSessions },
+      configUpdatedAt: config?.updatedAt || null,
+    })
   })
 
   // ─── POST /whatsapp-commerce/config ───────────────────────────────────────
@@ -435,7 +520,7 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
     const schema = z.object({
       storeId: z.string(),
       phoneNumberId: z.string().min(1),
-      accessToken: z.string().min(1),
+      accessToken: z.string().optional(),
       verifyToken: z.string().min(8),
       welcomeMessage: z.string().optional(),
       isActive: z.boolean().default(true),
@@ -444,10 +529,32 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: parsed.error.flatten() })
 
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, parsed.data.storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const existingConfig = await prisma.whatsappCommerceConfig.findUnique({ where: { storeId: parsed.data.storeId } })
+    const accessToken = parsed.data.accessToken?.trim() || existingConfig?.accessToken
+    if (!accessToken) return reply.status(400).send({ error: 'accessToken مطلوب عند الإعداد الأول' })
+
     const config = await prisma.whatsappCommerceConfig.upsert({
       where: { storeId: parsed.data.storeId },
-      update: parsed.data,
-      create: parsed.data,
+      update: {
+        storeId: parsed.data.storeId,
+        phoneNumberId: parsed.data.phoneNumberId,
+        accessToken,
+        verifyToken: parsed.data.verifyToken,
+        welcomeMessage: parsed.data.welcomeMessage,
+        isActive: parsed.data.isActive,
+      },
+      create: {
+        storeId: parsed.data.storeId,
+        phoneNumberId: parsed.data.phoneNumberId,
+        accessToken,
+        verifyToken: parsed.data.verifyToken,
+        welcomeMessage: parsed.data.welcomeMessage,
+        isActive: parsed.data.isActive,
+      },
     })
     return reply.send({ success: true, config: { ...config, accessToken: '***' } })
   })
@@ -456,6 +563,10 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
   app.get('/sessions', { preHandler: authenticate }, async (request, reply) => {
     const { storeId, page = '1', limit = '20' } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
+
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const skip = (parseInt(page) - 1) * parseInt(limit)
     const [sessions, total] = await Promise.all([
@@ -476,6 +587,10 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
     const { storeId } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
     const [totalSessions, activeSessions, activeCartsCount] = await Promise.all([
       prisma.whatsappCommerceSession.count({ where: { storeId } }),
       prisma.whatsappCommerceSession.count({
@@ -485,6 +600,45 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
     ])
 
     return reply.send({ totalSessions, activeSessions, activeCartsCount })
+  })
+
+  app.post('/test-message', { preHandler: authenticate }, async (request, reply) => {
+    const schema = z.object({
+      storeId: z.string(),
+      phone: z.string().min(8),
+      message: z.string().min(5).max(300).optional(),
+    })
+
+    const parsed = schema.safeParse(request.body)
+    if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: parsed.error.flatten() })
+
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, parsed.data.storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const config = await prisma.whatsappCommerceConfig.findUnique({ where: { storeId: parsed.data.storeId } })
+    if (!config || !config.isActive) {
+      return reply.status(503).send({
+        error: 'WhatsApp Commerce غير جاهز حالياً',
+        status: 'NOT_READY',
+      })
+    }
+
+    const ok = await sendText(
+      config.phoneNumberId,
+      config.accessToken,
+      parsed.data.phone,
+      parsed.data.message || 'رسالة اختبار من WhatsApp Commerce في بازار',
+    )
+
+    if (!ok) {
+      return reply.status(502).send({
+        error: 'فشل إرسال رسالة الاختبار إلى مزود واتساب',
+        status: 'DEGRADED',
+      })
+    }
+
+    return reply.send({ success: true })
   })
 
   // ─── POST /whatsapp-commerce/broadcast ────────────────────────────────────
@@ -501,13 +655,17 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
     const { storeId, message, targetAll, phones } = parsed.data
 
-    const config = await prisma.whatsappCommerceConfig.findUnique({ where: { storeId } })
-    if (!config || !config.isActive) return reply.status(400).send({ error: 'WhatsApp Commerce غير مُفعَّل' })
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
+    const config = await prisma.whatsappCommerceConfig.findFirst({ where: { storeId, store: { merchantId } } })
+    if (!config || !config.isActive) return reply.status(503).send({ error: 'WhatsApp Commerce غير مُفعَّل', status: 'NOT_READY' })
 
     let targetPhones: string[] = []
     if (targetAll) {
       const sessions = await prisma.whatsappCommerceSession.findMany({
-        where: { storeId },
+        where: { storeId, lastMessageAt: { gte: new Date(Date.now() - WHATSAPP_RECIPIENT_FRESHNESS_WINDOW_MS) } },
         select: { phone: true },
       })
       targetPhones = sessions.map((s) => s.phone)
@@ -515,14 +673,28 @@ export async function whatsappCommerceRoutes(app: FastifyInstance) {
       targetPhones = phones || []
     }
 
+    const uniquePhones = Array.from(new Set(targetPhones.map((phone) => normalizeWhatsappPhone(phone)).filter(Boolean) as string[]))
+    if (uniquePhones.length === 0) {
+      return reply.status(400).send({ error: 'لا يوجد مستلمون صالحون للإرسال' })
+    }
+
+    const finalTargets = uniquePhones.slice(0, WHATSAPP_BROADCAST_MAX_RECIPIENTS)
+
     let sent = 0
     let failed = 0
-    for (const phone of targetPhones.slice(0, 100)) { // max 100 at a time
+    for (const phone of finalTargets) {
       const ok = await sendText(config.phoneNumberId, config.accessToken, phone, message)
       if (ok) sent++
       else failed++
     }
 
-    return reply.send({ success: true, sent, failed, total: targetPhones.length })
+    return reply.send({
+      success: true,
+      sent,
+      failed,
+      total: uniquePhones.length,
+      attempted: finalTargets.length,
+      truncated: uniquePhones.length > finalTargets.length,
+    })
   })
 }

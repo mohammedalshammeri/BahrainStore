@@ -96,6 +96,34 @@ export async function productRoutes(app: FastifyInstance) {
   })
 
   // ── Get Product by ID ─────────────────────────
+  app.get('/:id/merchant', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const merchantId = (request.user as any).id
+
+    const product = await prisma.product.findFirst({
+      where: { id, store: { merchantId } },
+      include: {
+        images: { orderBy: { sortOrder: 'asc' } },
+        options: {
+          orderBy: { sortOrder: 'asc' },
+          include: { values: { orderBy: { sortOrder: 'asc' } } },
+        },
+        variants: {
+          orderBy: { sortOrder: 'asc' },
+          include: { optionValues: { include: { optionValue: true } } },
+        },
+        category: { select: { id: true, name: true, nameAr: true, slug: true } },
+      },
+    })
+
+    if (!product) {
+      return reply.status(404).send({ error: 'المنتج غير موجود' })
+    }
+
+    return reply.send({ product })
+  })
+
+  // ── Get Product by ID ─────────────────────────
   app.get('/:id', async (request, reply) => {
     const { id } = request.params as { id: string }
 
@@ -365,7 +393,16 @@ export async function productRoutes(app: FastifyInstance) {
       request.query as Record<string, string>
 
     const skip = (parseInt(page) - 1) * parseInt(limit)
-    const where: any = { storeId, isActive: true }
+    const store = await prisma.store.findFirst({
+      where: {
+        OR: [{ id: storeId }, { subdomain: storeId }],
+        isActive: true,
+      },
+      select: { id: true },
+    })
+    if (!store) return reply.send({ products: [], total: 0, page: parseInt(page), pages: 0 })
+
+    const where: any = { storeId: store.id, isActive: true }
     if (search) where.OR = [
       { name: { contains: search, mode: 'insensitive' } },
       { nameAr: { contains: search, mode: 'insensitive' } },
@@ -400,6 +437,36 @@ export async function productRoutes(app: FastifyInstance) {
     ])
 
     return reply.send({ products, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) })
+  })
+
+  app.get('/public/:subdomain/:slug', async (request, reply) => {
+    const { subdomain, slug } = request.params as { subdomain: string; slug: string }
+
+    const product = await prisma.product.findFirst({
+      where: {
+        slug,
+        isActive: true,
+        store: { subdomain, isActive: true },
+      },
+      include: {
+        images: { orderBy: { sortOrder: 'asc' } },
+        options: {
+          orderBy: { sortOrder: 'asc' },
+          include: { values: { orderBy: { sortOrder: 'asc' } } },
+        },
+        variants: {
+          where: { isActive: true },
+          orderBy: { sortOrder: 'asc' },
+          include: { optionValues: { include: { optionValue: { include: { option: true } } } } },
+        },
+        category: { select: { id: true, name: true, nameAr: true, slug: true } },
+        store: { select: { id: true, subdomain: true } },
+      },
+    })
+
+    if (!product) return reply.status(404).send({ error: 'المنتج غير موجود' })
+
+    return reply.send({ product })
   })
 
   // ── Instant Search Suggestions ────────────────

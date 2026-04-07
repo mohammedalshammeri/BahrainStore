@@ -98,22 +98,13 @@ export async function domainRoutes(app: FastifyInstance) {
     if (isVerified) {
       await prisma.domainVerification.update({
         where: { storeId },
-        data: { isVerified: true, verifiedAt: new Date(), sslStatus: 'ISSUING' },
+        data: { isVerified: true, verifiedAt: new Date(), sslStatus: 'PENDING', sslIssuedAt: null, sslExpiresAt: null },
       })
 
-      // Simulate SSL issuance (in prod: trigger Let's Encrypt / cert manager)
-      setTimeout(async () => {
-        await prisma.domainVerification.update({
-          where: { storeId },
-          data: {
-            sslStatus: 'ACTIVE',
-            sslIssuedAt: new Date(),
-            sslExpiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 90 days
-          },
-        })
-      }, 2000)
-
-      return reply.send({ success: true, message: 'تم التحقق من الدومين بنجاح! جاري إصدار شهادة SSL...' })
+      return reply.send({
+        success: true,
+        message: 'تم التحقق من الدومين بنجاح، لكن إصدار SSL الآلي غير مفعّل حالياً. أبقينا الحالة معلّقة بدلاً من محاكاة شهادة غير حقيقية.',
+      })
     }
 
     return reply.status(400).send({ success: false, message: 'لم يتم العثور على سجل DNS. يرجى الانتظار 24 ساعة بعد إضافة السجل.' })

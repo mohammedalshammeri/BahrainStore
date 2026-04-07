@@ -3,7 +3,7 @@
 import React, { useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Alert, Switch, ActivityIndicator, Modal,
+  TextInput, Alert, ActivityIndicator, Modal,
 } from 'react-native'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { storeApi } from '@/api'
@@ -17,10 +17,8 @@ function SectionHeader({ title }: { title: string }) {
 
 function SettingRow({
   icon, label, value, onPress,
-  toggle, toggleValue, onToggle,
 }: {
   icon: string; label: string; value?: string; onPress?: () => void;
-  toggle?: boolean; toggleValue?: boolean; onToggle?: (v: boolean) => void;
 }) {
   return (
     <TouchableOpacity style={styles.settingRow} onPress={onPress} activeOpacity={onPress ? 0.7 : 1}>
@@ -29,14 +27,7 @@ function SettingRow({
         <Text style={styles.settingLabelText}>{label}</Text>
         {value && <Text style={styles.settingValue}>{value}</Text>}
       </View>
-      {toggle ? (
-        <Switch
-          value={toggleValue}
-          onValueChange={onToggle}
-          trackColor={{ false: COLORS.border, true: COLORS.primary }}
-          thumbColor="#fff"
-        />
-      ) : onPress ? (
+      {onPress ? (
         <Text style={styles.chevron}>›</Text>
       ) : null}
     </TouchableOpacity>
@@ -49,8 +40,6 @@ export default function SettingsScreen() {
   const storeId = currentStore?.id || ''
   const [editModal, setEditModal] = useState(false)
   const [storeName, setStoreName] = useState('')
-  const [storePhone, setStorePhone] = useState('')
-  const [notifications, setNotifications] = useState(true)
 
   const { data: storeData, isLoading } = useQuery({
     queryKey: ['store-settings', storeId],
@@ -65,7 +54,6 @@ export default function SettingsScreen() {
   React.useEffect(() => {
     if (storeData) {
       setStoreName(storeData.name || '')
-      setStorePhone(storeData.phone || '')
     }
   }, [storeData])
 
@@ -114,26 +102,21 @@ export default function SettingsScreen() {
           <SectionHeader title="إعدادات المتجر" />
           <SettingRow icon="🏪" label="اسم المتجر" value={store.name} onPress={() => setEditModal(true)} />
           <SettingRow icon="🌐" label="رابط المتجر" value={store.domain || store.subdomain} />
-          <SettingRow icon="📱" label="هاتف المتجر" value={store.phone || '—'} onPress={() => setEditModal(true)} />
+          <SettingRow icon="🆔" label="المعرّف الفرعي" value={store.subdomain || '—'} />
           <SettingRow icon="🌍" label="العملة" value={'BHD'} />
         </View>
       ) : null}
 
-      {/* Notifications */}
       <View style={styles.card}>
-        <SectionHeader title="الإشعارات" />
-        <SettingRow
-          icon="🔔"
-          label="إشعارات الطلبات الجديدة"
-          toggle toggleValue={notifications}
-          onToggle={setNotifications}
-        />
-        <SettingRow
-          icon="📦"
-          label="تحذيرات المخزون المنخفض"
-          toggle toggleValue={notifications}
-          onToggle={setNotifications}
-        />
+        <SectionHeader title="حالة التفعيل" />
+        <View style={styles.infoBlock}>
+          <Text style={styles.infoTitle}>الإعدادات المتاحة من التطبيق</Text>
+          <Text style={styles.infoText}>يمكنك حالياً تعديل اسم المتجر فقط من تطبيق الجوال. إعدادات الدومين والسياسات والقنوات المتقدمة تُدار من لوحة التحكم.</Text>
+        </View>
+        <View style={[styles.infoBlock, styles.infoBlockBorder]}>
+          <Text style={styles.infoTitle}>الإشعارات</Text>
+          <Text style={styles.infoText}>تنبيهات الطلبات والمخزون داخل التطبيق تعمل عبر شاشة التنبيهات. تفعيل push mobile من الخادم لم يُربط بعد، لذلك لا نعرض مفاتيح تحكم محلية مضللة هنا.</Text>
+        </View>
       </View>
 
       {/* App Info */}
@@ -164,23 +147,13 @@ export default function SettingsScreen() {
               placeholderTextColor={COLORS.gray400}
             />
 
-            <Text style={styles.fieldLabel}>رقم الهاتف</Text>
-            <TextInput
-              style={styles.fieldInput}
-              value={storePhone}
-              onChangeText={setStorePhone}
-              placeholder="+973 XXXX XXXX"
-              placeholderTextColor={COLORS.gray400}
-              keyboardType="phone-pad"
-            />
-
             <View style={styles.modalBtns}>
               <TouchableOpacity style={styles.modalCancel} onPress={() => setEditModal(false)}>
                 <Text style={styles.modalCancelText}>إلغاء</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.modalConfirm}
-                onPress={() => updateMutation.mutate({ name: storeName, phone: storePhone })}
+                onPress={() => updateMutation.mutate({ name: storeName })}
                 disabled={updateMutation.isPending}
               >
                 <Text style={styles.modalConfirmText}>
@@ -221,6 +194,10 @@ const styles = StyleSheet.create({
   settingLabel: { flex: 1 },
   settingLabelText: { fontSize: 14, color: COLORS.text },
   settingValue: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
+  infoBlock: { paddingHorizontal: 14, paddingVertical: 14 },
+  infoBlockBorder: { borderTopWidth: 1, borderTopColor: COLORS.border },
+  infoTitle: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 6 },
+  infoText: { fontSize: 13, lineHeight: 20, color: COLORS.textSecondary },
   chevron: { fontSize: 20, color: COLORS.gray400 },
   logoutBtn: {
     backgroundColor: COLORS.card, borderRadius: 14, padding: 16,

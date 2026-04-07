@@ -1,9 +1,31 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { getEnv } from '../lib/env'
 import { authenticate } from '../middleware/auth.middleware'
 import https from 'node:https'
 import crypto from 'node:crypto'
+
+function httpGet(url: string, headers: Record<string, string>): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url)
+    const req = https.request(
+      {
+        hostname: urlObj.hostname,
+        path: urlObj.pathname + urlObj.search,
+        method: 'GET',
+        headers,
+      },
+      (res) => {
+        let raw = ''
+        res.on('data', (c) => (raw += c))
+        res.on('end', () => { try { resolve(JSON.parse(raw)) } catch { resolve(raw) } })
+      }
+    )
+    req.on('error', reject)
+    req.end()
+  })
+}
 
 function httpPost(url: string, body: object, headers: Record<string, string>): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -32,10 +54,256 @@ function httpPost(url: string, body: object, headers: Record<string, string>): P
   })
 }
 
+function appendFormValue(params: URLSearchParams, key: string, value: unknown) {
+  if (value === undefined || value === null) return
+
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => appendFormValue(params, `${key}[${index}]`, entry))
+    return
+  }
+
+  if (typeof value === 'object') {
+    for (const [childKey, childValue] of Object.entries(value)) {
+      appendFormValue(params, `${key}[${childKey}]`, childValue)
+    }
+    return
+  }
+
+  params.append(key, String(value))
+}
+
+function toFormBody(body: Record<string, unknown>) {
+  const params = new URLSearchParams()
+
+  for (const [key, value] of Object.entries(body)) {
+    appendFormValue(params, key, value)
+  }
+
+  return params.toString()
+}
+
+function httpPostForm(url: string, body: Record<string, unknown>, headers: Record<string, string>): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url)
+    const data = toFormBody(body)
+    const req = https.request(
+      {
+        hostname: urlObj.hostname,
+        path: urlObj.pathname + urlObj.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': Buffer.byteLength(data),
+          ...headers,
+        },
+      },
+      (res) => {
+        let raw = ''
+        res.on('data', (c) => (raw += c))
+        res.on('end', () => { try { resolve(JSON.parse(raw)) } catch { resolve(raw) } })
+      }
+    )
+    req.on('error', reject)
+    req.write(data)
+    req.end()
+  })
+}
+
+function normalizeGatewayAmount(value: unknown): number | null {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return null
+  return Math.round(amount * 1000)
+}
+
+function resolveGatewayStatus(value: unknown): 'PAID' | 'FAILED' | 'PENDING' {
+  const status = String(value ?? '').toUpperCase()
+
+  if (['A', 'APPROVED', 'CAPTURED', 'CONFIRMED', 'COMPLETED', 'PAID'].includes(status)) {
+    return 'PAID'
+  }
+
+  if (['D', 'DECLINED', 'FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED'].includes(status)) {
+    return 'FAILED'
+  }
+
+  return 'PENDING'
+}
+
+async function applyVerifiedGatewayStatus(input: {
+  orderId: string
+  gatewayRef?: string | null
+  status: 'PAID' | 'FAILED' | 'PENDING'
+  gatewayResponse: unknown
+}) {
+  const [payment, order] = await Promise.all([
+    prisma.payment.findUnique({
+      where: { orderId: input.orderId },
+      select: { status: true, paidAt: true, gatewayRef: true },
+    }),
+    prisma.order.findUnique({
+      where: { id: input.orderId },
+      select: { paymentStatus: true, paidAt: true },
+    }),
+  ])
+
+  if (!order) {
+    return false
+  }
+
+  const currentStatus = payment?.status ?? order.paymentStatus
+  const currentGatewayRef = payment?.gatewayRef ?? null
+
+  if (currentStatus === 'PAID' && input.status !== 'PAID') {
+    return false
+  }
+
+  if (currentStatus === 'FAILED' && input.status === 'PENDING') {
+    return false
+  }
+
+  if (currentStatus === input.status && (input.gatewayRef ?? currentGatewayRef ?? null) === currentGatewayRef) {
+    return false
+  }
+
+  const now = input.status === 'PAID' ? payment?.paidAt ?? order.paidAt ?? new Date() : null
+
+  await prisma.payment.updateMany({
+    where: { orderId: input.orderId },
+    data: {
+      status: input.status,
+      paidAt: input.status === 'PAID' ? now : undefined,
+      gatewayRef: input.gatewayRef ?? undefined,
+      gatewayResponse: input.gatewayResponse as any,
+    },
+  })
+
+  await prisma.order.update({
+    where: { id: input.orderId },
+    data: {
+      paymentStatus: input.status,
+      paidAt: input.status === 'PAID' ? now : undefined,
+      ...(input.status === 'PAID' ? { status: 'CONFIRMED' as const } : {}),
+    },
+  })
+
+  return true
+}
+
+function verifyStripeSignature(payload: string, signatureHeader: string, secret: string) {
+  const elements = Object.fromEntries(
+    signatureHeader.split(',').map((part) => {
+      const [key, ...rest] = part.split('=')
+      return [key?.trim(), rest.join('=').trim()]
+    }).filter(([key, value]) => key && value)
+  ) as Record<string, string>
+
+  const timestamp = elements.t
+  const signature = elements.v1
+  if (!timestamp || !signature) {
+    return false
+  }
+
+  const age = Math.abs(Date.now() - Number(timestamp) * 1000)
+  if (!Number.isFinite(age) || age > 5 * 60 * 1000) {
+    return false
+  }
+
+  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${payload}`, 'utf8').digest('hex')
+  const expectedBuffer = Buffer.from(expected, 'hex')
+  const signatureBuffer = Buffer.from(signature, 'hex')
+
+  if (expectedBuffer.length !== signatureBuffer.length) {
+    return false
+  }
+
+  return crypto.timingSafeEqual(expectedBuffer, signatureBuffer)
+}
+
+type StripeCheckoutSessionWebhook = {
+  id?: string
+  amount_total?: number | null
+  currency?: string | null
+  payment_status?: string | null
+  metadata?: {
+    orderId?: string
+    storeId?: string
+  }
+}
+
+function stripeSessionMatchesOrder(
+  session: StripeCheckoutSessionWebhook,
+  order: { total: unknown; store: { currency: string } },
+  payment: { gatewayRef: string | null }
+) {
+  if (session.id && payment.gatewayRef && session.id !== payment.gatewayRef) return false
+
+  const expectedAmount = normalizeGatewayAmount(order.total)
+  const actualAmount = typeof session.amount_total === 'number' ? session.amount_total : null
+  if (expectedAmount !== null && actualAmount !== null && expectedAmount !== actualAmount) return false
+
+  if (session.currency && session.currency.toUpperCase() !== order.store.currency.toUpperCase()) return false
+
+  return true
+}
+
+type PayTabsQueryResponse = {
+  tran_ref?: string
+  cart_id?: string
+  cart_amount?: number | string
+  cart_currency?: string
+  payment_result?: {
+    response_status?: string
+  }
+}
+
+function payTabsResponseMatchesOrder(
+  response: PayTabsQueryResponse,
+  order: { orderNumber: string; total: unknown; store: { currency: string } },
+  payment: { gatewayRef: string | null }
+) {
+  if (response.tran_ref && payment.gatewayRef && response.tran_ref !== payment.gatewayRef) return false
+  if (response.cart_id && response.cart_id !== order.orderNumber) return false
+
+  const expectedAmount = normalizeGatewayAmount(order.total)
+  const actualAmount = normalizeGatewayAmount(response.cart_amount)
+  if (expectedAmount !== null && actualAmount !== null && expectedAmount !== actualAmount) return false
+
+  if (response.cart_currency && response.cart_currency !== order.store.currency) return false
+
+  return true
+}
+
+type PostpayCheckoutResponse = {
+  id?: string
+  order_id?: string
+  total_amount?: number | string
+  amount?: number | string
+  currency?: string
+  status?: string
+}
+
+function postpayResponseMatchesOrder(
+  response: PostpayCheckoutResponse,
+  order: { orderNumber: string; total: unknown; store: { currency: string } },
+  payment: { gatewayRef: string | null }
+) {
+  if (response.id && payment.gatewayRef && response.id !== payment.gatewayRef) return false
+  if (response.order_id && response.order_id !== order.orderNumber) return false
+
+  const expectedAmount = normalizeGatewayAmount(order.total)
+  const actualAmount = normalizeGatewayAmount(response.total_amount ?? response.amount)
+  if (expectedAmount !== null && actualAmount !== null && expectedAmount !== actualAmount) return false
+
+  if (response.currency && response.currency !== order.store.currency) return false
+
+  return true
+}
+
 // ─── New Payment Gateway Routes ───────────────────────────────────────────────
 // Stripe, PayTabs, PayPal, STC Pay, mada, HyperPay, Postpay
 
 export async function newPaymentRoutes(app: FastifyInstance) {
+  const env = getEnv()
 
   // ════════════════════════════════════════════
   // STRIPE
@@ -56,7 +324,7 @@ export async function newPaymentRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'Stripe غير مفعّلة لهذا المتجر' })
     }
 
-    const session = await httpPost(
+    const session = await httpPostForm(
       'https://api.stripe.com/v1/checkout/sessions',
       {
         payment_method_types: ['card'],
@@ -89,26 +357,83 @@ export async function newPaymentRoutes(app: FastifyInstance) {
   })
 
   // Stripe Webhook
-  app.post('/stripe/webhook', async (request, reply) => {
+  app.post('/stripe/webhook', { config: { rawBody: true } }, async (request, reply) => {
     const sig = request.headers['stripe-signature'] as string
     if (!sig) return reply.status(400).send({ error: 'Missing signature' })
 
-    const payload = (request.body as Buffer | string).toString()
-    let event: any
+    const payload = typeof (request as any).rawBody === 'string'
+      ? (request as any).rawBody
+      : Buffer.isBuffer((request as any).rawBody)
+        ? (request as any).rawBody.toString('utf8')
+        : ''
+
+    if (!payload) {
+      return reply.status(400).send({ error: 'Missing raw payload' })
+    }
+
+    let candidateEvent: any
 
     try {
-      // In production: verify signature with stripe.webhooks.constructEvent(payload, sig, webhookSecret)
-      event = JSON.parse(payload)
+      candidateEvent = JSON.parse(payload)
     } catch {
       return reply.status(400).send({ error: 'Invalid payload' })
     }
 
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object
-      const orderId = session.metadata?.orderId
+    const session = candidateEvent?.data?.object as StripeCheckoutSessionWebhook | undefined
+    const orderId = session?.metadata?.orderId
+    const storeId = session?.metadata?.storeId
+
+    const order = orderId
+      ? await prisma.order.findUnique({
+          where: { id: orderId },
+          include: { payment: true, store: { include: { settings: true } } },
+        })
+      : null
+
+    const storeSettings = order?.store.settings ?? (storeId
+      ? await prisma.store.findUnique({
+          where: { id: storeId },
+          select: { settings: true },
+        }).then((store) => store?.settings ?? null)
+      : null)
+
+    if (!storeSettings?.stripeWebhookSecret) {
+      app.log.warn({ orderId, storeId }, 'Stripe webhook ignored because webhook secret is missing')
+      return reply.status(202).send({ received: true })
+    }
+
+    if (!verifyStripeSignature(payload, sig, storeSettings.stripeWebhookSecret)) {
+      return reply.status(400).send({ error: 'Invalid signature' })
+    }
+
+    const event = candidateEvent
+
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+      if (!orderId || !order?.payment) {
+        return reply.send({ received: true })
+      }
+
+      if (!stripeSessionMatchesOrder(session ?? {}, order, order.payment)) {
+        app.log.warn({ orderId, stripeSessionId: session?.id }, 'Stripe webhook verification mismatch')
+        return reply.status(409).send({ error: 'charge mismatch' })
+      }
+
+      await applyVerifiedGatewayStatus({
+        orderId,
+        gatewayRef: session?.id ?? order.payment.gatewayRef,
+        status: resolveGatewayStatus(session?.payment_status ?? 'PAID'),
+        gatewayResponse: event,
+      })
+    }
+
+    if (event.type === 'checkout.session.async_payment_failed' || event.type === 'checkout.session.expired') {
       if (orderId) {
-        await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'PAID', paidAt: new Date(), status: 'CONFIRMED' } })
-        await prisma.payment.updateMany({ where: { orderId }, data: { status: 'PAID', paidAt: new Date() } })
+        await applyVerifiedGatewayStatus({
+          orderId,
+          gatewayRef: session?.id ?? order?.payment?.gatewayRef,
+          status: 'FAILED',
+          gatewayResponse: event,
+        })
       }
     }
 
@@ -154,7 +479,7 @@ export async function newPaymentRoutes(app: FastifyInstance) {
         country: order.address?.country || 'BH',
       },
       return: successUrl,
-      callback: `${process.env.API_URL}/api/v1/payment/paytabs/webhook`,
+      callback: `${env.API_BASE_URL}/api/v1/payments/paytabs/webhook`,
     }, { authorization: settings.paytabsSecretKey })
 
     if (!result.redirect_url) {
@@ -171,14 +496,52 @@ export async function newPaymentRoutes(app: FastifyInstance) {
   })
 
   app.post('/paytabs/webhook', async (request, reply) => {
-    const { cart_id, tran_ref, payment_result } = request.body as any
-    if (payment_result?.response_status === 'A') {
-      const order = await prisma.order.findFirst({ where: { orderNumber: cart_id } })
-      if (order) {
-        await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: 'PAID', paidAt: new Date(), status: 'CONFIRMED' } })
-        await prisma.payment.updateMany({ where: { orderId: order.id }, data: { status: 'PAID', paidAt: new Date(), gatewayRef: tran_ref } })
-      }
+    const { tran_ref } = request.body as { tran_ref?: string }
+    if (!tran_ref) return reply.status(400).send({ error: 'missing tran_ref' })
+
+    const payment = await prisma.payment.findFirst({
+      where: { gatewayRef: tran_ref },
+      include: {
+        order: { include: { store: { include: { settings: true } } } },
+      },
+    })
+    if (!payment) return reply.send({ status: 'ok' })
+
+    const settings = payment.order.store.settings
+    if (!settings?.paytabsProfileId || !settings.paytabsSecretKey) {
+      app.log.warn({ tranRef: tran_ref, orderId: payment.orderId }, 'PayTabs webhook ignored because store configuration is incomplete')
+      return reply.status(202).send({ status: 'ok' })
     }
+
+    const region = settings.paytabsRegion || 'SAU'
+    const apiUrl = `https://secure.paytabs.${region === 'SAU' ? 'sa' : 'com'}/payment/query`
+
+    let verified: PayTabsQueryResponse
+    try {
+      verified = await httpPost(apiUrl, {
+        profile_id: settings.paytabsProfileId,
+        tran_ref: tran_ref,
+      }, { authorization: settings.paytabsSecretKey })
+    } catch (err) {
+      app.log.error({ err, tranRef: tran_ref, orderId: payment.orderId }, 'PayTabs webhook verification failed')
+      return reply.status(502).send({ error: 'verification failed' })
+    }
+
+    if (!payTabsResponseMatchesOrder(verified, payment.order, payment)) {
+      app.log.warn({ tranRef: tran_ref, orderId: payment.orderId }, 'PayTabs webhook verification mismatch')
+      return reply.status(409).send({ error: 'charge mismatch' })
+    }
+
+    const status = resolveGatewayStatus(verified.payment_result?.response_status)
+    if (status !== 'PENDING') {
+      await applyVerifiedGatewayStatus({
+        orderId: payment.orderId,
+        gatewayRef: verified.tran_ref ?? tran_ref,
+        status,
+        gatewayResponse: verified,
+      })
+    }
+
     return reply.send({ status: 'ok' })
   })
 
@@ -205,9 +568,8 @@ export async function newPaymentRoutes(app: FastifyInstance) {
     const baseUrl = isLive ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com'
 
     // Get access token
-    const tokenData = await httpPost(`${baseUrl}/v1/oauth2/token`, { grant_type: 'client_credentials' }, {
+    const tokenData = await httpPostForm(`${baseUrl}/v1/oauth2/token`, { grant_type: 'client_credentials' }, {
       Authorization: `Basic ${Buffer.from(`${settings.paypalClientId}:${settings.paypalSecret}`).toString('base64')}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
     })
 
     if (!tokenData.access_token) {
@@ -253,7 +615,7 @@ export async function newPaymentRoutes(app: FastifyInstance) {
     const isLive = settings.paypalMode === 'live'
     const baseUrl = isLive ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com'
 
-    const tokenData = await httpPost(`${baseUrl}/v1/oauth2/token`, { grant_type: 'client_credentials' }, {
+    const tokenData = await httpPostForm(`${baseUrl}/v1/oauth2/token`, { grant_type: 'client_credentials' }, {
       Authorization: `Basic ${Buffer.from(`${settings.paypalClientId}:${settings.paypalSecret}`).toString('base64')}`,
     })
 
@@ -262,8 +624,12 @@ export async function newPaymentRoutes(app: FastifyInstance) {
     })
 
     if (capture.status === 'COMPLETED') {
-      await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'PAID', paidAt: new Date(), status: 'CONFIRMED' } })
-      await prisma.payment.updateMany({ where: { orderId }, data: { status: 'PAID', paidAt: new Date() } })
+      await applyVerifiedGatewayStatus({
+        orderId,
+        gatewayRef: paypalOrderId,
+        status: 'PAID',
+        gatewayResponse: capture,
+      })
     }
 
     return reply.send({ status: capture.status, capture })
@@ -340,8 +706,12 @@ export async function newPaymentRoutes(app: FastifyInstance) {
     })
 
     if (result.StatusCode === '3004') {
-      await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'PAID', paidAt: new Date(), status: 'CONFIRMED' } })
-      await prisma.payment.updateMany({ where: { orderId }, data: { status: 'PAID', paidAt: new Date() } })
+      await applyVerifiedGatewayStatus({
+        orderId,
+        gatewayRef: reference,
+        status: 'PAID',
+        gatewayResponse: result,
+      })
       return reply.send({ success: true, message: 'تم الدفع بنجاح' })
     }
 
@@ -451,8 +821,12 @@ export async function newPaymentRoutes(app: FastifyInstance) {
     }).then((r) => r.json() as any)
 
     if (result.result?.code?.match(/^(000\.000\.|000\.100\.1|000\.[36])/)) {
-      await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'PAID', paidAt: new Date(), status: 'CONFIRMED' } })
-      await prisma.payment.updateMany({ where: { orderId }, data: { status: 'PAID', paidAt: new Date() } })
+      await applyVerifiedGatewayStatus({
+        orderId,
+        gatewayRef: checkoutId,
+        status: 'PAID',
+        gatewayResponse: result,
+      })
       return reply.send({ success: true, result })
     }
 
@@ -520,14 +894,51 @@ export async function newPaymentRoutes(app: FastifyInstance) {
   })
 
   app.post('/postpay/webhook', async (request, reply) => {
-    const body = request.body as any
-    if (body.event === 'checkout.confirmed' && body.order_id) {
-      const order = await prisma.order.findFirst({ where: { orderNumber: body.order_id } })
-      if (order) {
-        await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: 'PAID', paidAt: new Date(), status: 'CONFIRMED' } })
-        await prisma.payment.updateMany({ where: { orderId: order.id }, data: { status: 'PAID', paidAt: new Date() } })
-      }
+    const body = request.body as { id?: string; order_id?: string }
+    if (!body.order_id) return reply.send({ received: true })
+
+    const order = await prisma.order.findFirst({
+      where: { orderNumber: body.order_id },
+      include: { payment: true, store: { include: { settings: true } } },
+    })
+    if (!order?.payment) return reply.send({ received: true })
+
+    const settings = order.store.settings
+    if (!settings?.postpayApiKey) {
+      app.log.warn({ orderId: order.id }, 'Postpay webhook ignored because store is missing API key')
+      return reply.status(202).send({ received: true })
     }
+
+    const checkoutId = body.id ?? order.payment.gatewayRef
+    if (!checkoutId) {
+      return reply.status(202).send({ received: true })
+    }
+
+    let verified: PostpayCheckoutResponse
+    try {
+      verified = await httpGet(`${settings.postpayApiUrl || 'https://api.postpay.io'}/v1/checkouts/${checkoutId}`, {
+        'x-api-key': settings.postpayApiKey,
+      })
+    } catch (err) {
+      app.log.error({ err, checkoutId, orderId: order.id }, 'Postpay webhook verification failed')
+      return reply.status(502).send({ error: 'verification failed' })
+    }
+
+    if (!postpayResponseMatchesOrder(verified, order, order.payment)) {
+      app.log.warn({ checkoutId, orderId: order.id }, 'Postpay webhook verification mismatch')
+      return reply.status(409).send({ error: 'charge mismatch' })
+    }
+
+    const status = resolveGatewayStatus(verified.status)
+    if (status !== 'PENDING') {
+      await applyVerifiedGatewayStatus({
+        orderId: order.id,
+        gatewayRef: verified.id ?? checkoutId,
+        status,
+        gatewayResponse: verified,
+      })
+    }
+
     return reply.send({ received: true })
   })
 
@@ -545,7 +956,7 @@ export async function newPaymentRoutes(app: FastifyInstance) {
     if (!stripeKey) return reply.status(500).send({ error: 'Stripe platform key not configured' })
 
     // Create or get Stripe customer
-    const customer = await httpPost('https://api.stripe.com/v1/customers', {
+    const customer = await httpPostForm('https://api.stripe.com/v1/customers', {
       email: store.merchant?.email,
       name: store.name,
       metadata: { storeId, merchantId },

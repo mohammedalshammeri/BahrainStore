@@ -7,6 +7,7 @@ import swagger from '@fastify/swagger'
 import swaggerUi from '@fastify/swagger-ui'
 import staticFiles from '@fastify/static'
 import multipart from '@fastify/multipart'
+import rawBody from 'fastify-raw-body'
 import path from 'path'
 
 import { authRoutes } from './routes/auth.routes'
@@ -72,8 +73,10 @@ import { bazarFinanceRoutes } from './routes/bazar-finance.routes'
 import { restaurantRoutes } from './routes/restaurant.routes'
 import { badgesRoutes, alertsRoutes } from './routes/badges-alerts.routes'
 import { verificationRoutes } from './routes/verification.routes'
+import { getEnv } from './lib/env'
 
 export async function buildServer() {
+  const env = getEnv()
   const app = Fastify({
     logger: true,
   })
@@ -87,6 +90,14 @@ export async function buildServer() {
 
   // ── Multipart (file uploads) ──────────────────
   await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } })
+
+  // ── Raw body for signed webhooks ──────────────
+  await app.register(rawBody, {
+    field: 'rawBody',
+    global: false,
+    encoding: 'utf8',
+    runFirst: true,
+  })
 
   await app.register(cors, {
     origin: (origin, cb) => {
@@ -113,7 +124,7 @@ export async function buildServer() {
 
   // ── JWT ───────────────────────────────────────
   await app.register(jwt, {
-    secret: process.env.JWT_SECRET!,
+    secret: env.JWT_SECRET,
   })
 
   // ── Swagger / OpenAPI docs ────────────────────

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import * as OTPAuth from 'otpauth'
 import QRCode from 'qrcode'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth.middleware'
+import { authenticate, resolvePlatformAccess } from '../middleware/auth.middleware'
 import { sendPasswordResetEmail } from '../lib/email'
 
 const registerSchema = z.object({
@@ -23,6 +23,10 @@ const loginSchema = z.object({
 
 const refreshSchema = z.object({
   refreshToken: z.string().min(1),
+})
+
+const googleExchangeSchema = z.object({
+  code: z.string().min(32),
 })
 
 export async function authRoutes(app: FastifyInstance) {
@@ -163,7 +167,7 @@ export async function authRoutes(app: FastifyInstance) {
       include: { merchant: true },
     })
 
-    if (!session || session.expiresAt < new Date()) {
+    if (!session || session.kind !== 'REFRESH' || session.expiresAt < new Date()) {
       return reply.status(401).send({ error: 'الجلسة منتهية، سجّل دخولك مجدداً' })
     }
 
@@ -179,7 +183,7 @@ export async function authRoutes(app: FastifyInstance) {
     const { refreshToken } = request.body as { refreshToken?: string }
 
     if (refreshToken) {
-      await prisma.session.deleteMany({ where: { refreshToken } })
+      await prisma.session.deleteMany({ where: { refreshToken, kind: 'REFRESH' } })
     }
 
     return reply.send({ message: 'تم تسجيل الخروج بنجاح' })
@@ -204,7 +208,13 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'الحساب غير موجود' })
     }
 
-    return reply.send({ merchant })
+    const platformAccess = merchant.isAdmin
+      ? await resolvePlatformAccess(request, reply)
+      : null
+
+    if (reply.sent) return
+
+    return reply.send({ merchant: { ...merchant, platformAccess } })
   })
 
   // ── Forgot Password ───────────────────────────
@@ -492,14 +502,52 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.redirect(`${dashboardUrl}/login?error=account_disabled`, 302)
       }
 
-      const { accessToken, refreshToken } = await generateTokens(app, merchant.id)
+      const exchangeCode = await generateGoogleExchangeCode(merchant.id)
       return reply.redirect(
-        `${dashboardUrl}/google-callback?at=${encodeURIComponent(accessToken)}&rt=${encodeURIComponent(refreshToken)}`,
+        `${dashboardUrl}/google-callback?code=${encodeURIComponent(exchangeCode)}`,
         302
       )
     } catch {
       return reply.redirect(`${dashboardUrl}/login?error=google_auth_failed`, 302)
     }
+  })
+
+  // ── Google OAuth: One-time code exchange ─────
+  app.post('/google/exchange', async (request, reply) => {
+    const result = googleExchangeSchema.safeParse(request.body)
+    if (!result.success) {
+      return reply.status(400).send({ error: 'رمز التبادل غير صحيح' })
+    }
+
+    const session = await prisma.session.findUnique({
+      where: { refreshToken: result.data.code },
+      include: { merchant: true },
+    })
+
+    if (!session || session.kind !== 'GOOGLE_OAUTH_EXCHANGE' || session.expiresAt < new Date()) {
+      if (session?.id) {
+        await prisma.session.delete({ where: { id: session.id } }).catch(() => {})
+      }
+      return reply.status(401).send({ error: 'رمز التبادل غير صالح أو منتهي الصلاحية' })
+    }
+
+    await prisma.session.delete({ where: { id: session.id } })
+
+    const { accessToken, refreshToken } = await generateTokens(app, session.merchantId)
+
+    return reply.send({
+      message: 'تم تسجيل الدخول بنجاح',
+      merchant: {
+        id: session.merchant.id,
+        email: session.merchant.email,
+        phone: session.merchant.phone,
+        firstName: session.merchant.firstName,
+        lastName: session.merchant.lastName,
+        isAdmin: session.merchant.isAdmin,
+      },
+      accessToken,
+      refreshToken,
+    })
   })
 
   // ── Staff Login ───────────────────────────────
@@ -553,8 +601,24 @@ async function generateTokens(app: FastifyInstance, merchantId: string) {
   expiresAt.setDate(expiresAt.getDate() + 30)
 
   await prisma.session.create({
-    data: { merchantId, refreshToken, expiresAt },
+    data: { merchantId, kind: 'REFRESH', refreshToken, expiresAt },
   })
 
   return { accessToken, refreshToken }
+}
+
+async function generateGoogleExchangeCode(merchantId: string) {
+  const code = crypto.randomBytes(32).toString('hex')
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
+
+  await prisma.session.create({
+    data: {
+      merchantId,
+      kind: 'GOOGLE_OAUTH_EXCHANGE',
+      refreshToken: code,
+      expiresAt,
+    },
+  })
+
+  return code
 }

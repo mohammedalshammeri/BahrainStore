@@ -16,7 +16,19 @@ export default function ShippingPage() {
   const queryClient = useQueryClient();
   const [expandedZone, setExpandedZone] = useState<string | null>(null);
   const [showAddZone, setShowAddZone] = useState(false);
+  const [rateFormZoneId, setRateFormZoneId] = useState<string | null>(null);
   const [newZone, setNewZone] = useState({ name: "", nameAr: "", countries: "" });
+  const [newRate, setNewRate] = useState({
+    name: "",
+    nameAr: "",
+    provider: "MANUAL",
+    price: "0",
+    estimatedDays: "3",
+    minOrderValue: "",
+    minWeight: "",
+    maxWeight: "",
+    isFree: false,
+  });
   const [trackingQuery, setTrackingQuery] = useState("");
   const [trackingResult, setTrackingResult] = useState<any>(null);
 
@@ -47,6 +59,43 @@ export default function ShippingPage() {
 
   const deleteZoneMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/shipping/zones/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["shipping-zones"] }),
+  });
+
+  const addRateMutation = useMutation({
+    mutationFn: async (zoneId: string) => {
+      await api.post("/shipping/rates", {
+        zoneId,
+        name: newRate.name,
+        nameAr: newRate.nameAr,
+        provider: newRate.provider,
+        price: newRate.isFree ? 0 : parseFloat(newRate.price) || 0,
+        estimatedDays: parseInt(newRate.estimatedDays, 10) || 3,
+        minOrderValue: newRate.minOrderValue ? parseFloat(newRate.minOrderValue) : undefined,
+        minWeight: newRate.minWeight ? parseFloat(newRate.minWeight) : undefined,
+        maxWeight: newRate.maxWeight ? parseFloat(newRate.maxWeight) : undefined,
+        isFree: newRate.isFree,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["shipping-zones"] });
+      setRateFormZoneId(null);
+      setNewRate({
+        name: "",
+        nameAr: "",
+        provider: "MANUAL",
+        price: "0",
+        estimatedDays: "3",
+        minOrderValue: "",
+        minWeight: "",
+        maxWeight: "",
+        isFree: false,
+      });
+    },
+  });
+
+  const deleteRateMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/shipping/rates/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["shipping-zones"] }),
   });
 
@@ -88,14 +137,25 @@ export default function ShippingPage() {
                 <span className="text-red-500">{trackingResult.error}</span>
               ) : (
                 <div className="space-y-1">
-                  <div className="font-medium">{trackingResult.status}</div>
-                  <div className="text-gray-500">{trackingResult.estimatedDelivery}</div>
-                  {trackingResult.events?.map((ev: any, i: number) => (
-                    <div key={i} className="flex gap-3 text-xs text-gray-400">
-                      <span>{new Date(ev.timestamp).toLocaleDateString("ar-BH")}</span>
-                      <span>{ev.description}</span>
+                  <div className="font-medium">{trackingResult.liveStatus?.status || trackingResult.tracking?.status || "غير متوفر"}</div>
+                  <div className="text-gray-500">
+                    {trackingResult.liveStatus?.available
+                      ? `مصدر التتبع: ${trackingResult.liveStatus.provider || trackingResult.tracking?.provider || "Carrier"}`
+                      : trackingResult.liveStatus?.message || "لا يوجد live tracking جاهز لهذا المزود حالياً"}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    رقم التتبع: {trackingResult.tracking?.trackingNumber || trackingQuery}
+                  </div>
+                  {trackingResult.liveStatus?.checkedAt && (
+                    <div className="text-xs text-gray-400">
+                      آخر تحقق: {new Date(trackingResult.liveStatus.checkedAt).toLocaleString("ar-BH")}
                     </div>
-                  ))}
+                  )}
+                  {trackingResult.tracking?.updatedAt && (
+                    <div className="text-xs text-gray-400">
+                      آخر تحديث محفوظ: {new Date(trackingResult.tracking.updatedAt).toLocaleString("ar-BH")}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -158,6 +218,54 @@ export default function ShippingPage() {
                 </div>
                 {expandedZone === zone.id && (
                   <div className="border-t px-4 py-3 bg-gray-50">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <p className="text-xs text-gray-500">إدارة معدلات الشحن لهذه المنطقة</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setRateFormZoneId(rateFormZoneId === zone.id ? null : zone.id)}
+                      >
+                        <Plus className="w-4 h-4 mr-1" /> معدل جديد
+                      </Button>
+                    </div>
+
+                    {rateFormZoneId === zone.id && (
+                      <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <Input placeholder="الاسم بالإنجليزية" value={newRate.name} onChange={e => setNewRate(p => ({ ...p, name: e.target.value }))} />
+                          <Input placeholder="الاسم بالعربية" value={newRate.nameAr} onChange={e => setNewRate(p => ({ ...p, nameAr: e.target.value }))} />
+                          <select
+                            value={newRate.provider}
+                            onChange={e => setNewRate(p => ({ ...p, provider: e.target.value }))}
+                            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm"
+                          >
+                            <option value="MANUAL">MANUAL</option>
+                            <option value="ARAMEX">ARAMEX</option>
+                            <option value="DHL">DHL</option>
+                          </select>
+                          <Input placeholder="السعر (BHD)" type="number" min="0" step="0.001" value={newRate.price} onChange={e => setNewRate(p => ({ ...p, price: e.target.value }))} disabled={newRate.isFree} />
+                          <Input placeholder="المدة التقديرية بالأيام" type="number" min="1" value={newRate.estimatedDays} onChange={e => setNewRate(p => ({ ...p, estimatedDays: e.target.value }))} />
+                          <Input placeholder="الحد الأدنى لقيمة الطلب" type="number" min="0" step="0.001" value={newRate.minOrderValue} onChange={e => setNewRate(p => ({ ...p, minOrderValue: e.target.value }))} />
+                          <Input placeholder="أقل وزن (kg)" type="number" min="0" step="0.001" value={newRate.minWeight} onChange={e => setNewRate(p => ({ ...p, minWeight: e.target.value }))} />
+                          <Input placeholder="أعلى وزن (kg)" type="number" min="0" step="0.001" value={newRate.maxWeight} onChange={e => setNewRate(p => ({ ...p, maxWeight: e.target.value }))} />
+                        </div>
+                        <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                          <input type="checkbox" checked={newRate.isFree} onChange={e => setNewRate(p => ({ ...p, isFree: e.target.checked }))} />
+                          شحن مجاني
+                        </label>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => addRateMutation.mutate(zone.id)}
+                            disabled={!newRate.name || !newRate.nameAr || addRateMutation.isPending}
+                          >
+                            حفظ المعدل
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setRateFormZoneId(null)}>إلغاء</Button>
+                        </div>
+                      </div>
+                    )}
+
                     {zone.rates?.length > 0 ? (
                       <table className="w-full text-sm">
                         <thead>
@@ -166,6 +274,8 @@ export default function ShippingPage() {
                             <th className="text-right pb-2">السعر</th>
                             <th className="text-right pb-2">المزود</th>
                             <th className="text-right pb-2">المدة</th>
+                            <th className="text-right pb-2">الحد الأدنى</th>
+                            <th className="text-right pb-2">إجراء</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -175,6 +285,17 @@ export default function ShippingPage() {
                               <td className="py-2">{rate.isFree ? <Badge className="bg-green-100 text-green-800 text-xs">مجاني</Badge> : `${rate.price} BHD`}</td>
                               <td className="py-2 text-gray-500">{rate.provider || "—"}</td>
                               <td className="py-2 text-gray-500">{rate.estimatedDays ? `${rate.estimatedDays} أيام` : "—"}</td>
+                              <td className="py-2 text-gray-500">{rate.minOrderValue ? `${rate.minOrderValue} BHD` : "—"}</td>
+                              <td className="py-2">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-red-500 hover:text-red-700"
+                                  onClick={() => deleteRateMutation.mutate(rate.id)}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>

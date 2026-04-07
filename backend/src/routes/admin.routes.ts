@@ -1,17 +1,52 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth.middleware'
-import { sendPasswordResetEmail, sendCustomAdminEmail } from '../lib/email'
+import { authenticate, requireAdmin, requireFullPlatformAdmin, requirePlatformPermission, resolvePlatformAccess } from '../middleware/auth.middleware'
+import { sendPasswordResetEmail, sendCustomAdminEmail, sendKycDecisionEmail } from '../lib/email'
 import { sendSms } from '../lib/sms'
+import { THEME_CHANGELOG_ASSET_KEYS, THEME_MANIFEST_ASSET_KEY, buildThemeManifestAsset, buildThemePackageBuffer, parseThemePackageBuffer, resolveThemeChangelogFromAssets, resolveThemeManifestFromAssets, themePackageManifestSchema } from '../lib/theme-package'
+import { adminKycRoutes } from './admin-kyc.routes'
 import crypto from 'crypto'
 
-async function requireAdmin(request: any, reply: any) {
-  const merchant = await prisma.merchant.findUnique({
-    where: { id: (request.user as any).id },
-    select: { isAdmin: true, isActive: true },
+const adminThemeSchema = z.object({
+  slug: z.string().min(3).regex(/^[a-z0-9-]+$/),
+  name: z.string().min(1),
+  nameAr: z.string().min(1),
+  description: z.string().optional(),
+  descriptionAr: z.string().optional(),
+  thumbnailUrl: z.string().url().optional(),
+  previewUrl: z.string().url().optional(),
+  demoUrl: z.string().url().optional(),
+  downloadUrl: z.string().url().optional(),
+  authorName: z.string().min(1),
+  authorEmail: z.string().email().optional(),
+  version: z.string().min(1).default('1.0.0'),
+  changelog: z.string().optional(),
+  price: z.number().min(0).default(0),
+  isPremium: z.boolean().default(false),
+  tags: z.array(z.string()).default([]),
+})
+
+async function syncThemeMetadataAssets(input: {
+  themeId: string
+  manifest: z.infer<typeof themePackageManifestSchema>
+  changelog?: string
+}) {
+  await prisma.themeAsset.upsert({
+    where: { themeId_key: { themeId: input.themeId, key: THEME_MANIFEST_ASSET_KEY } },
+    create: { themeId: input.themeId, key: THEME_MANIFEST_ASSET_KEY, content: JSON.stringify(input.manifest, null, 2), mimeType: 'application/json' },
+    update: { content: JSON.stringify(input.manifest, null, 2), mimeType: 'application/json' },
   })
-  if (!merchant?.isAdmin) {
-    return reply.status(403).send({ error: 'غير مصرح — يخص مشرفي المنصة فقط' })
+
+  const changelogKey = THEME_CHANGELOG_ASSET_KEYS[0]
+  if (input.changelog?.trim()) {
+    await prisma.themeAsset.upsert({
+      where: { themeId_key: { themeId: input.themeId, key: changelogKey } },
+      create: { themeId: input.themeId, key: changelogKey, content: input.changelog.trim(), mimeType: 'text/markdown' },
+      update: { content: input.changelog.trim(), mimeType: 'text/markdown' },
+    })
+  } else {
+    await prisma.themeAsset.deleteMany({ where: { themeId: input.themeId, key: { in: [...THEME_CHANGELOG_ASSET_KEYS] } } })
   }
 }
 
@@ -23,6 +58,8 @@ function startOfMonth() {
 }
 
 export async function adminRoutes(app: FastifyInstance) {
+  await adminKycRoutes(app)
+
   // ── One-time setup: grant admin to a merchant account ─────────────────────
   // Call once: POST /api/v1/admin/setup  { email, setupToken }
   app.post('/setup', async (req, reply) => {
@@ -42,7 +79,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Platform stats ─────────────────────────────────────────────────────────
-  app.get('/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/stats', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const [
       totalMerchants,
       totalStores,
@@ -82,7 +119,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── All merchants ──────────────────────────────────────────────────────────
-  app.get('/merchants', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/merchants', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { page = '1', limit = '20', search } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
 
@@ -127,7 +164,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Get single merchant detail ──────────────────────────────────────────────
-  app.get('/merchants/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/merchants/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
 
     const merchant = await prisma.merchant.findUnique({
@@ -166,7 +203,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Toggle merchant isActive / isAdmin ─────────────────────────────────────
-  app.patch('/merchants/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/merchants/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { isActive, isAdmin: makeAdmin } = req.body as { isActive?: boolean; isAdmin?: boolean }
 
@@ -183,7 +220,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Reset merchant password ─────────────────────────────────────────────────
-  app.post('/merchants/:id/reset-password', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/merchants/:id/reset-password', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const merchant = await prisma.merchant.findUnique({
       where: { id },
@@ -206,7 +243,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Send direct email to merchant ──────────────────────────────────────────
-  app.post('/merchants/:id/email', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/merchants/:id/email', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { subject, body } = req.body as { subject: string; body: string }
 
@@ -221,7 +258,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Internal notes: list ────────────────────────────────────────────────────
-  app.get('/merchants/:id/notes', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/merchants/:id/notes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const notes = await prisma.adminNote.findMany({
       where: { merchantId: id },
@@ -231,7 +268,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Internal notes: add ─────────────────────────────────────────────────────
-  app.post('/merchants/:id/notes', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/merchants/:id/notes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { content } = req.body as { content: string }
     const adminMerchant = await prisma.merchant.findUnique({
@@ -251,14 +288,14 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Internal notes: delete ──────────────────────────────────────────────────
-  app.delete('/merchants/:id/notes/:noteId', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/merchants/:id/notes/:noteId', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { noteId } = req.params as { id: string; noteId: string }
     await prisma.adminNote.delete({ where: { id: noteId } })
     return reply.send({ success: true })
   })
 
   // ── All stores ─────────────────────────────────────────────────────────────
-  app.get('/stores', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/stores', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { page = '1', limit = '20', search } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
 
@@ -314,7 +351,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Store detail (full stats) ─────────────────────────────────────────────
-  app.get('/stores/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/stores/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
 
     const store = await prisma.store.findUnique({
@@ -380,7 +417,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Toggle store isActive / change plan ────────────────────────────────────
-  app.patch('/stores/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/stores/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { isActive, plan } = req.body as { isActive?: boolean; plan?: string }
 
@@ -397,7 +434,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Extend store trial ──────────────────────────────────────────────────────
-  app.post('/stores/:id/extend-trial', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/stores/:id/extend-trial', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { days = 7 } = req.body as { days?: number }
 
@@ -416,7 +453,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Impersonate merchant (generate short-lived token) ──────────────────────
-  app.post('/stores/:id/impersonate', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/stores/:id/impersonate', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const store = await prisma.store.findUnique({
       where: { id },
@@ -438,7 +475,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Store activity log ──────────────────────────────────────────────────────
-  app.get('/stores/:id/activity', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/stores/:id/activity', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
 
     const [recentOrders, recentProducts, recentCustomers] = await Promise.all([
@@ -499,7 +536,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Apps marketplace (CRUD) ────────────────────────────────────────────────
-  app.get('/apps', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/apps', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { page = '1', limit = '20', search } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
     const where: any = search
@@ -520,27 +557,27 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ apps, total, pages: Math.ceil(total / parseInt(limit)) })
   })
 
-  app.post('/apps', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/apps', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const body = req.body as any
     const app_ = await prisma.app.create({ data: body })
     return reply.status(201).send({ app: app_ })
   })
 
-  app.patch('/apps/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/apps/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as any
     const app_ = await prisma.app.update({ where: { id }, data: body })
     return reply.send({ app: app_ })
   })
 
-  app.delete('/apps/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/apps/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     await prisma.app.delete({ where: { id } })
     return reply.send({ success: true })
   })
 
   // ── Themes marketplace (CRUD) ──────────────────────────────────────────────
-  app.get('/themes', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/themes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { page = '1', limit = '20', search } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
     const where: any = search
@@ -561,27 +598,27 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ themes, total, pages: Math.ceil(total / parseInt(limit)) })
   })
 
-  app.post('/themes', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/themes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const body = req.body as any
     const theme = await prisma.theme.create({ data: body })
     return reply.status(201).send({ theme })
   })
 
-  app.patch('/themes/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/themes/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as any
     const theme = await prisma.theme.update({ where: { id }, data: body })
     return reply.send({ theme })
   })
 
-  app.delete('/themes/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/themes/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     await prisma.theme.delete({ where: { id } })
     return reply.send({ success: true })
   })
 
   // ── Support tickets (platform-wide) ──────────────────────────────────────
-  app.get('/support', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/support', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (req, reply) => {
     const { page = '1', limit = '20', status, priority } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
     const where: any = {}
@@ -606,7 +643,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ tickets, total, pages: Math.ceil(total / parseInt(limit)) })
   })
 
-  app.patch('/support/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/support/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { status, priority } = req.body as { status?: string; priority?: string }
     const data: any = {}
@@ -618,7 +655,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Support: ticket detail + reply + assign ────────────────────────────────
-  app.get('/support/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/support/stats', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (_req, reply) => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
     const [open, inProgress, resolved, todayCount, urgent, avgResolve] = await Promise.all([
       prisma.supportTicket.count({ where: { status: 'OPEN' } }),
@@ -641,7 +678,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ open, inProgress, resolved, todayCount, urgent, avgResolveHours: avgHours })
   })
 
-  app.get('/support/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/support/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const ticket = await prisma.supportTicket.findUnique({
       where: { id },
@@ -654,7 +691,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ ticket })
   })
 
-  app.post('/support/:id/reply', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/support/:id/reply', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { body: msgBody } = req.body as { body: string }
     const adminId = (req as any).user?.id ?? 'admin'
@@ -668,7 +705,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ message })
   })
 
-  app.patch('/support/:id/assign', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/support/:id/assign', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { assignedTo, assignedToName } = req.body as { assignedTo: string; assignedToName: string }
     const ticket = await prisma.supportTicket.update({
@@ -679,7 +716,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Health: recent webhook logs ────────────────────────────────────────────
-  app.get('/health/recent-requests', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/health/recent-requests', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (_req, reply) => {
     const logs = await prisma.webhookLog.findMany({
       orderBy: { createdAt: 'desc' },
       take: 100,
@@ -691,7 +728,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Plans stats (per-plan store counts + revenue) ─────────────────────────
-  app.get('/plans/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/plans/stats', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (_req, reply) => {
     const [planCounts, planRevenue] = await Promise.all([
       prisma.store.groupBy({
         by: ['plan'],
@@ -730,7 +767,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── MRR / ARR Analytics ────────────────────────────────────────────────────
-  app.get('/analytics/mrr', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/analytics/mrr', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     // MRR = sum of invoices paid in current month / plan prices
     const now = new Date()
     const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1)
@@ -805,7 +842,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Cohort Analysis ────────────────────────────────────────────────────────
-  app.get('/analytics/cohort', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/analytics/cohort', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     const last6Months: { month: string; new: number; retained: number; churned: number }[] = []
     const now = new Date()
 
@@ -825,7 +862,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Platform Health ────────────────────────────────────────────────────────
-  app.get('/health/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/health/stats', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (_req, reply) => {
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000)
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
@@ -851,7 +888,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ── Auto-suspend expired stores (G1) ─────────────────────────────────────
   // Called by a cron job: POST /api/v1/admin/billing/suspend-expired
-  app.post('/billing/suspend-expired', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.post('/billing/suspend-expired', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const now = new Date()
     const expired = await prisma.store.findMany({
       where: {
@@ -885,7 +922,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── PLANS ADMIN ─────────────────────────────────────
 
   // ── List plans with configs + counts + revenue ──
-  app.get('/plans', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/plans', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (_req, reply) => {
     const PLAN_ORDER = ['STARTER', 'GROWTH', 'PRO', 'ENTERPRISE']
     const DEFAULTS: Record<string, { priceBD: number; maxProducts: number; maxOrders: number; maxStaff: number; maxApps: number; features: string[] }> = {
       STARTER:    { priceBD: 0,   maxProducts: 100,  maxOrders: 50,   maxStaff: 1,  maxApps: 0,  features: ['100 منتج', '50 طلب/شهر', 'متجر واحد', 'دعم البريد'] },
@@ -934,7 +971,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Upsert plan config ──
-  app.put('/plans/:plan', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.put('/plans/:plan', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req, reply) => {
     const { plan } = req.params as { plan: string }
     if (!['STARTER', 'GROWTH', 'PRO', 'ENTERPRISE'].includes(plan)) {
       return reply.status(400).send({ error: 'Invalid plan' })
@@ -951,7 +988,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── BILLING ADMIN ───────────────────────────────────
 
   // ── List all invoices (admin) ──
-  app.get('/billing/invoices', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/billing/invoices', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     const { page = '1', limit = '20', status, search } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
 
@@ -1003,7 +1040,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Invoice detail ──
-  app.get('/billing/invoices/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/billing/invoices/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const invoice = await prisma.billingInvoice.findUnique({
       where: { id },
@@ -1021,7 +1058,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Update invoice (cancel / markPaid / markOverdue / discount) ──
-  app.patch('/billing/invoices/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/billing/invoices/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { action, paymentRef, discountBD, discountNote } = req.body as any
 
@@ -1044,7 +1081,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Create manual invoice ──
-  app.post('/billing/invoices', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/billing/invoices', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     const { storeId, plan, amountBD, periodStart, periodEnd, status, paymentRef, notes } = req.body as any
     const store = await prisma.store.findUnique({ where: { id: storeId } })
     if (!store) return reply.status(404).send({ error: 'Store not found' })
@@ -1072,7 +1109,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Revenue report (last 12 months breakdown) ──
-  app.get('/billing/revenue-report', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/billing/revenue-report', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (_req, reply) => {
     const now = new Date()
     const last12 = new Date(now.getFullYear() - 1, now.getMonth(), 1)
 
@@ -1109,7 +1146,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── SUBSCRIPTIONS ADMIN ─────────────────────────────
 
   // ── Expired subscriptions ──
-  app.get('/subscriptions/expired', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/subscriptions/expired', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req, reply) => {
     const { page = '1', limit = '20' } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
     const now = new Date()
@@ -1132,7 +1169,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Trial subscriptions ──
-  app.get('/subscriptions/trial', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/subscriptions/trial', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req, reply) => {
     const { page = '1', limit = '20' } = req.query as Record<string, string>
     const skip = (parseInt(page) - 1) * parseInt(limit)
     const now = new Date()
@@ -1155,7 +1192,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Notify expiring subscriptions (7/3/1 day marks) ──
-  app.post('/billing/notify-expiring', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.post('/billing/notify-expiring', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (_req, reply) => {
     const now = new Date()
     const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
 
@@ -1189,7 +1226,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Apps: action routes ────────────────────────────────────────────────────
-  app.get('/apps/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/apps/stats', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (_req, reply) => {
     const [total, pending, official, installs] = await Promise.all([
       prisma.app.count(),
       prisma.app.count({ where: { isApproved: false, isActive: true } }),
@@ -1199,19 +1236,19 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ total, pending, official, totalInstalls: installs })
   })
 
-  app.post('/apps/:id/approve', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/apps/:id/approve', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const updated = await prisma.app.update({ where: { id }, data: { isApproved: true, isActive: true } })
     return reply.send({ app: updated })
   })
 
-  app.post('/apps/:id/reject', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/apps/:id/reject', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const updated = await prisma.app.update({ where: { id }, data: { isApproved: false, isActive: false } })
     return reply.send({ app: updated })
   })
 
-  app.post('/apps/:id/disable-all', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/apps/:id/disable-all', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const [app_, affected] = await Promise.all([
       prisma.app.update({ where: { id }, data: { isActive: false } }),
@@ -1220,14 +1257,14 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ app: app_, affected: affected.count })
   })
 
-  app.post('/apps/:id/enable', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/apps/:id/enable', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const updated = await prisma.app.update({ where: { id }, data: { isActive: true } })
     return reply.send({ app: updated })
   })
 
   // ── Themes: action routes ──────────────────────────────────────────────────
-  app.get('/themes/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/themes/stats', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (_req, reply) => {
     const [total, pending, featured, revenueAgg] = await Promise.all([
       prisma.theme.count(),
       prisma.theme.count({ where: { isApproved: false, isActive: true } }),
@@ -1237,19 +1274,19 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ total, pending, featured, totalRevenue: Number(revenueAgg._sum.amount ?? 0) })
   })
 
-  app.post('/themes/:id/approve', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/themes/:id/approve', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const updated = await prisma.theme.update({ where: { id }, data: { isApproved: true, isActive: true } })
     return reply.send({ theme: updated })
   })
 
-  app.post('/themes/:id/reject', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/themes/:id/reject', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const updated = await prisma.theme.update({ where: { id }, data: { isApproved: false, isActive: false } })
     return reply.send({ theme: updated })
   })
 
-  app.post('/themes/:id/toggle-featured', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/themes/:id/toggle-featured', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const current = await prisma.theme.findUnique({ where: { id }, select: { isFeatured: true } })
     if (!current) return reply.status(404).send({ error: 'Theme not found' })
@@ -1257,10 +1294,278 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ theme: updated })
   })
 
+  app.get('/themes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
+    const { page = '1', limit = '18', search = '' } = req.query as Record<string, string>
+    const take = Math.max(1, Math.min(100, parseInt(limit, 10) || 18))
+    const skip = (Math.max(1, parseInt(page, 10) || 1) - 1) * take
+    const query = search.trim()
+
+    const where: any = query
+      ? {
+          OR: [
+            { name: { contains: query, mode: 'insensitive' } },
+            { nameAr: { contains: query, mode: 'insensitive' } },
+            { slug: { contains: query, mode: 'insensitive' } },
+            { authorName: { contains: query, mode: 'insensitive' } },
+            { tags: { has: query } },
+          ],
+        }
+      : {}
+
+    const [themes, total] = await Promise.all([
+      prisma.theme.findMany({
+        where,
+        include: { _count: { select: { purchases: true } }, assets: { where: { key: { in: [THEME_MANIFEST_ASSET_KEY, ...THEME_CHANGELOG_ASSET_KEYS] } } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      prisma.theme.count({ where }),
+    ])
+
+    return reply.send({
+      themes: themes.map((theme) => {
+        const manifest = resolveThemeManifestFromAssets(theme.assets, {
+          slug: theme.slug,
+          name: theme.name,
+          nameAr: theme.nameAr,
+          description: theme.description ?? undefined,
+          descriptionAr: theme.descriptionAr ?? undefined,
+          version: '1.0.0',
+          price: Number(theme.price),
+          tags: theme.tags,
+          previewUrl: theme.previewUrl ?? undefined,
+          thumbnailUrl: theme.thumbnailUrl ?? undefined,
+          demoUrl: theme.demoUrl ?? undefined,
+        })
+        return {
+          ...theme,
+          version: manifest.version,
+          changelog: resolveThemeChangelogFromAssets(theme.assets),
+        }
+      }),
+      total,
+      pages: Math.max(1, Math.ceil(total / take)),
+    })
+  })
+
+  app.post('/themes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
+    const result = adminThemeSchema.safeParse(req.body)
+    if (!result.success) {
+      return reply.status(400).send({ error: 'بيانات غير صحيحة', details: result.error.flatten() })
+    }
+
+    const theme = await prisma.theme.create({
+      data: {
+        slug: result.data.slug,
+        name: result.data.name,
+        nameAr: result.data.nameAr,
+        description: result.data.description,
+        descriptionAr: result.data.descriptionAr,
+        thumbnailUrl: result.data.thumbnailUrl,
+        previewUrl: result.data.previewUrl,
+        demoUrl: result.data.demoUrl,
+        downloadUrl: result.data.downloadUrl,
+        authorName: result.data.authorName,
+        authorEmail: result.data.authorEmail,
+        price: result.data.price,
+        isPremium: result.data.isPremium || result.data.price > 0,
+        tags: result.data.tags,
+      },
+      include: { _count: { select: { purchases: true } } },
+    })
+
+    await syncThemeMetadataAssets({
+      themeId: theme.id,
+      manifest: themePackageManifestSchema.parse({
+        slug: result.data.slug,
+        name: result.data.name,
+        nameAr: result.data.nameAr,
+        description: result.data.description,
+        descriptionAr: result.data.descriptionAr,
+        version: result.data.version,
+        price: result.data.price,
+        tags: result.data.tags,
+        previewUrl: result.data.previewUrl,
+        thumbnailUrl: result.data.thumbnailUrl,
+        demoUrl: result.data.demoUrl,
+      }),
+      changelog: result.data.changelog,
+    })
+
+    return reply.status(201).send({ theme })
+  })
+
+  app.patch('/themes/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const result = adminThemeSchema.partial().safeParse(req.body)
+    if (!result.success) {
+      return reply.status(400).send({ error: 'بيانات غير صحيحة', details: result.error.flatten() })
+    }
+
+    const data = { ...result.data } as Record<string, unknown>
+    const nextVersion = typeof data.version === 'string' ? data.version : undefined
+    const nextChangelog = typeof data.changelog === 'string' ? data.changelog : undefined
+    delete data.version
+    delete data.changelog
+    if (typeof data.price === 'number' && typeof data.isPremium !== 'boolean') {
+      data.isPremium = data.price > 0
+    }
+
+    const theme = await prisma.theme.update({
+      where: { id },
+      data,
+      include: { _count: { select: { purchases: true } }, assets: true },
+    })
+
+    const currentManifest = resolveThemeManifestFromAssets(theme.assets, {
+      slug: theme.slug,
+      name: theme.name,
+      nameAr: theme.nameAr,
+      description: theme.description ?? undefined,
+      descriptionAr: theme.descriptionAr ?? undefined,
+      version: '1.0.0',
+      price: Number(theme.price),
+      tags: theme.tags,
+      previewUrl: theme.previewUrl ?? undefined,
+      thumbnailUrl: theme.thumbnailUrl ?? undefined,
+      demoUrl: theme.demoUrl ?? undefined,
+    })
+
+    await syncThemeMetadataAssets({
+      themeId: theme.id,
+      manifest: themePackageManifestSchema.parse({
+        slug: theme.slug,
+        name: theme.name,
+        nameAr: theme.nameAr,
+        description: theme.description ?? undefined,
+        descriptionAr: theme.descriptionAr ?? undefined,
+        version: nextVersion ?? currentManifest.version,
+        price: Number(theme.price),
+        tags: theme.tags,
+        previewUrl: theme.previewUrl ?? undefined,
+        thumbnailUrl: theme.thumbnailUrl ?? undefined,
+        demoUrl: theme.demoUrl ?? undefined,
+      }),
+      changelog: nextChangelog ?? resolveThemeChangelogFromAssets(theme.assets) ?? undefined,
+    })
+
+    return reply.send({ theme })
+  })
+
+  app.delete('/themes/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    await prisma.theme.delete({ where: { id } })
+    return reply.send({ success: true })
+  })
+
+  app.post('/themes/import-package', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
+    const file = await req.file()
+    if (!file) return reply.status(400).send({ error: 'ملف الحزمة مطلوب' })
+
+    try {
+      const parsedPackage = parseThemePackageBuffer(await file.toBuffer())
+      const manifest = themePackageManifestSchema.parse(parsedPackage.manifest)
+      const adminMerchant = await prisma.merchant.findUnique({
+        where: { id: (req.user as any).id },
+        select: { email: true, firstName: true, lastName: true },
+      })
+
+      const existingTheme = await prisma.theme.findUnique({ where: { slug: manifest.slug } })
+      const theme = existingTheme
+        ? await prisma.theme.update({
+            where: { id: existingTheme.id },
+            data: {
+              name: manifest.name,
+              nameAr: manifest.nameAr,
+              description: manifest.description,
+              descriptionAr: manifest.descriptionAr,
+              previewUrl: manifest.previewUrl,
+              thumbnailUrl: manifest.thumbnailUrl,
+              demoUrl: manifest.demoUrl,
+              price: manifest.price,
+              isPremium: manifest.price > 0,
+              tags: manifest.tags,
+              isApproved: false,
+            },
+          })
+        : await prisma.theme.create({
+            data: {
+              slug: manifest.slug,
+              name: manifest.name,
+              nameAr: manifest.nameAr,
+              description: manifest.description,
+              descriptionAr: manifest.descriptionAr,
+              previewUrl: manifest.previewUrl,
+              thumbnailUrl: manifest.thumbnailUrl,
+              demoUrl: manifest.demoUrl,
+              price: manifest.price,
+              isPremium: manifest.price > 0,
+              tags: manifest.tags,
+              authorName: `${adminMerchant?.firstName ?? ''} ${adminMerchant?.lastName ?? ''}`.trim() || adminMerchant?.email || 'Bazar Admin',
+              authorEmail: adminMerchant?.email,
+              isApproved: false,
+            },
+          })
+
+      await prisma.themeAsset.deleteMany({ where: { themeId: theme.id } })
+      await prisma.themeAsset.createMany({
+        data: [buildThemeManifestAsset(manifest), ...parsedPackage.assets].map((asset) => ({
+          themeId: theme.id,
+          key: asset.key,
+          content: asset.content,
+          mimeType: asset.mimeType,
+        })),
+      })
+
+      return reply.send({
+        message: existingTheme ? 'تم تحديث حزمة الثيم وإعادتها للمراجعة' : 'تم استيراد حزمة الثيم بنجاح',
+        theme,
+        assetsCount: parsedPackage.assets.length,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'تعذر استيراد الحزمة'
+      return reply.status(400).send({ error: message })
+    }
+  })
+
+  app.get('/themes/:id/export-package', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const theme = await prisma.theme.findUnique({
+      where: { id },
+      include: { assets: { orderBy: { key: 'asc' } } },
+    })
+
+    if (!theme) return reply.status(404).send({ error: 'القالب غير موجود' })
+
+    const manifest = resolveThemeManifestFromAssets(theme.assets, {
+      slug: theme.slug,
+      name: theme.name,
+      nameAr: theme.nameAr,
+      description: theme.description ?? undefined,
+      descriptionAr: theme.descriptionAr ?? undefined,
+      version: '1.0.0',
+      price: Number(theme.price),
+      tags: theme.tags,
+      previewUrl: theme.previewUrl ?? undefined,
+      thumbnailUrl: theme.thumbnailUrl ?? undefined,
+      demoUrl: theme.demoUrl ?? undefined,
+    })
+
+    const packageBuffer = buildThemePackageBuffer({
+      manifest,
+      assets: theme.assets,
+    })
+
+    reply.header('Content-Type', 'application/zip')
+    reply.header('Content-Disposition', `attachment; filename="${theme.slug}.zip"`)
+    return reply.send(packageBuffer)
+  })
+
   // ─────────────────────────── ANNOUNCEMENTS (ADMIN) ──────────────────────────
 
   // GET all announcements (admin)
-  app.get('/admin/announcements', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/announcements', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const announcements = await prisma.announcement.findMany({
       orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
     })
@@ -1268,7 +1573,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST create announcement
-  app.post('/admin/announcements', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.post('/admin/announcements', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { title, titleAr, body, bodyAr, type, isActive, isPinned, targetPlan, startsAt, endsAt } = req.body as any
     if (!title || !titleAr) return reply.code(400).send({ error: 'title and titleAr required' })
     const ann = await prisma.announcement.create({
@@ -1287,7 +1592,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PUT update announcement
-  app.put('/admin/announcements/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.put('/admin/announcements/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const d = req.body as any
     const ann = await prisma.announcement.update({
@@ -1307,14 +1612,14 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE announcement
-  app.delete('/admin/announcements/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.delete('/admin/announcements/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { id } = req.params as any
     await prisma.announcement.delete({ where: { id } })
     return reply.send({ success: true })
   })
 
   // PATCH toggle active
-  app.patch('/admin/announcements/:id/toggle', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.patch('/admin/announcements/:id/toggle', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const current = await prisma.announcement.findUnique({ where: { id }, select: { isActive: true } })
     if (!current) return reply.status(404).send({ error: 'Announcement not found' })
@@ -1325,7 +1630,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── PLATFORM BLOG ───────────────────────────────────
 
   // GET all platform blog posts (admin)
-  app.get('/admin/platform-blog', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/platform-blog', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { category, published } = req.query as any
     const where: any = {}
     if (category) where.category = category
@@ -1346,7 +1651,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET single platform blog post
-  app.get('/admin/platform-blog/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/platform-blog/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const post = await prisma.platformBlogPost.findUnique({ where: { id } })
     if (!post) return reply.status(404).send({ error: 'Post not found' })
@@ -1354,7 +1659,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST create platform blog post
-  app.post('/admin/platform-blog', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.post('/admin/platform-blog', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { title, titleAr, slug, content, contentAr, excerpt, excerptAr, coverImage, category, isPublished, tags, authorName } = req.body as any
     if (!title || !titleAr || !slug || !content) return reply.code(400).send({ error: 'title, titleAr, slug, content required' })
     const post = await prisma.platformBlogPost.create({
@@ -1374,7 +1679,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PUT update platform blog post
-  app.put('/admin/platform-blog/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.put('/admin/platform-blog/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const d = req.body as any
     const post = await prisma.platformBlogPost.update({
@@ -1394,7 +1699,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PATCH toggle publish
-  app.patch('/admin/platform-blog/:id/publish', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.patch('/admin/platform-blog/:id/publish', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const current = await prisma.platformBlogPost.findUnique({ where: { id }, select: { isPublished: true } })
     if (!current) return reply.status(404).send({ error: 'Post not found' })
@@ -1409,7 +1714,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE platform blog post
-  app.delete('/admin/platform-blog/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.delete('/admin/platform-blog/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { id } = req.params as any
     await prisma.platformBlogPost.delete({ where: { id } })
     return reply.send({ success: true })
@@ -1418,7 +1723,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── EMAIL TEMPLATES ─────────────────────────────────
 
   // GET all email templates
-  app.get('/admin/email-templates', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/email-templates', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const templates = await prisma.emailTemplate.findMany({ orderBy: { key: 'asc' } })
 
     // Seed defaults if empty
@@ -1463,7 +1768,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PUT update email template
-  app.put('/admin/email-templates/:key', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.put('/admin/email-templates/:key', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { key } = req.params as any
     const { subject, subjectAr, body, bodyAr, name, nameAr, vars } = req.body as any
     const template = await prisma.emailTemplate.update({
@@ -1482,7 +1787,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET preview email template (replace vars with sample data)
-  app.get('/admin/email-templates/:key/preview', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/email-templates/:key/preview', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req: any, reply) => {
     const { key } = req.params as any
     const { lang } = req.query as any
     const template = await prisma.emailTemplate.findUnique({ where: { key } })
@@ -1513,7 +1818,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── PLATFORM ROLES ──────────────────────────────────
 
   // GET all roles
-  app.get('/admin/roles', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/roles', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
     const roles = await prisma.platformRole.findMany({
       include: { _count: { select: { members: true } } },
       orderBy: { createdAt: 'asc' },
@@ -1522,8 +1827,8 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST create role
-  app.post('/admin/roles', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
-    const { name, nameAr, description, canViewMerchants, canDisableStore, canReplyTickets, canEditPlans, canManageApps, canViewFinancials, canViewAuditLog, canManageContent, canManageTeam } = req.body as any
+  app.post('/admin/roles', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
+    const { name, nameAr, description, canViewMerchants, canDisableStore, canReplyTickets, canEditPlans, canManageApps, canViewFinancials, canViewAuditLog, canManageContent, canReviewKYC, canManageTeam } = req.body as any
     if (!name || !nameAr) return reply.code(400).send({ error: 'name and nameAr required' })
     const role = await prisma.platformRole.create({
       data: {
@@ -1538,6 +1843,7 @@ export async function adminRoutes(app: FastifyInstance) {
         canViewFinancials: canViewFinancials ?? false,
         canViewAuditLog: canViewAuditLog ?? false,
         canManageContent: canManageContent ?? false,
+        canReviewKYC: canReviewKYC ?? false,
         canManageTeam: canManageTeam ?? false,
       },
     })
@@ -1558,11 +1864,12 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PUT update role
-  app.put('/admin/roles/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.put('/admin/roles/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const d = req.body as any
     const existing = await prisma.platformRole.findUnique({ where: { id } })
     if (!existing) return reply.status(404).send({ error: 'Role not found' })
+    if (existing.isSystem) return reply.status(400).send({ error: 'لا يمكن تعديل الدور النظامي' })
     const role = await prisma.platformRole.update({
       where: { id },
       data: {
@@ -1576,6 +1883,7 @@ export async function adminRoutes(app: FastifyInstance) {
         canViewFinancials: d.canViewFinancials ?? undefined,
         canViewAuditLog: d.canViewAuditLog ?? undefined,
         canManageContent: d.canManageContent ?? undefined,
+        canReviewKYC: d.canReviewKYC ?? undefined,
         canManageTeam: d.canManageTeam ?? undefined,
       },
     })
@@ -1596,7 +1904,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE role (only non-system roles with no members)
-  app.delete('/admin/roles/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.delete('/admin/roles/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const role = await prisma.platformRole.findUnique({ where: { id }, include: { _count: { select: { members: true } } } })
     if (!role) return reply.status(404).send({ error: 'Role not found' })
@@ -1609,7 +1917,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── PLATFORM TEAM ───────────────────────────────────
 
   // GET staff list
-  app.get('/admin/team', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/team', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
     const { status } = req.query as any
     const where: any = {}
     if (status === 'active') where.isActive = true
@@ -1624,7 +1932,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST invite staff member
-  app.post('/admin/team', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.post('/admin/team', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
     const { email, firstName, lastName, roleId } = req.body as any
     if (!email || !firstName || !lastName || !roleId) {
       return reply.code(400).send({ error: 'email, firstName, lastName, roleId required' })
@@ -1632,7 +1940,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const role = await prisma.platformRole.findUnique({ where: { id: roleId } })
     if (!role) return reply.status(404).send({ error: 'Role not found' })
 
-    const inviteToken = Math.random().toString(36).slice(2) + Date.now().toString(36)
+    const inviteToken = crypto.randomBytes(32).toString('hex')
     const existing = await prisma.platformStaff.findUnique({ where: { email } })
     if (existing) return reply.status(409).send({ error: 'موظف بهذا الإيميل موجود بالفعل' })
 
@@ -1660,11 +1968,16 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PATCH update staff (role / active)
-  app.patch('/admin/team/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.patch('/admin/team/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const { roleId, isActive } = req.body as any
     const existing = await prisma.platformStaff.findUnique({ where: { id } })
     if (!existing) return reply.status(404).send({ error: 'Staff not found' })
+
+    if (roleId) {
+      const role = await prisma.platformRole.findUnique({ where: { id: roleId }, select: { id: true } })
+      if (!role) return reply.status(404).send({ error: 'Role not found' })
+    }
 
     const member = await prisma.platformStaff.update({
       where: { id },
@@ -1693,7 +2006,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE staff
-  app.delete('/admin/team/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.delete('/admin/team/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageTeam')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const existing = await prisma.platformStaff.findUnique({ where: { id } })
     if (!existing) return reply.status(404).send({ error: 'Staff not found' })
@@ -1717,7 +2030,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── AUDIT LOG ───────────────────────────────────────
 
   // GET audit logs (paginated, filterable)
-  app.get('/admin/audit', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/audit', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (req: any, reply) => {
     const { page = '1', limit = '50', actorId, action, entityType, from, to } = req.query as any
     const skip = (parseInt(page) - 1) * parseInt(limit)
 
@@ -1743,7 +2056,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET audit log stats (actor breakdown, action counts)
-  app.get('/admin/audit/stats', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/audit/stats', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (req: any, reply) => {
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
     const [total, todayCount, topActions] = await Promise.all([
       prisma.auditLog.count(),
@@ -1759,7 +2072,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET distinct action types (for filter dropdown)
-  app.get('/admin/audit/actions', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/audit/actions', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (req: any, reply) => {
     const actions = await prisma.auditLog.groupBy({
       by: ['action'],
       orderBy: { _count: { action: 'desc' } },
@@ -1771,7 +2084,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── PARTNERS (برنامج الشركاء) ───────────────────────
 
   // GET all partners
-  app.get('/admin/partners', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/partners', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { status } = req.query as any
     const where: any = {}
     if (status) where.status = status
@@ -1789,7 +2102,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET partner referrals
-  app.get('/admin/partners/:id/referrals', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/partners/:id/referrals', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { id } = req.params as any
     const referrals = await prisma.partnerReferral.findMany({
       where: { partnerId: id },
@@ -1799,7 +2112,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST create partner manually
-  app.post('/admin/partners', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.post('/admin/partners', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { companyName, contactName, email, phone, website, type, commissionRate } = req.body as any
     if (!companyName || !contactName || !email) return reply.code(400).send({ error: 'companyName, contactName, email required' })
     const existing = await prisma.partner.findUnique({ where: { email } })
@@ -1820,7 +2133,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PATCH update partner (commission, badge, status)
-  app.patch('/admin/partners/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.patch('/admin/partners/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { id } = req.params as any
     const { commissionRate, certifiedBadge, status, companyName, contactName } = req.body as any
     const partner = await prisma.partner.update({
@@ -1837,7 +2150,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST record commission payment
-  app.post('/admin/partners/:id/pay', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.post('/admin/partners/:id/pay', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { id } = req.params as any
     const { amount } = req.body as any
     if (!amount || isNaN(parseFloat(amount))) return reply.code(400).send({ error: 'amount required' })
@@ -1868,7 +2181,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE partner
-  app.delete('/admin/partners/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.delete('/admin/partners/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { id } = req.params as any
     await prisma.partner.delete({ where: { id } })
     return reply.send({ success: true })
@@ -1877,7 +2190,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── SUBSCRIPTION COUPONS (كوبونات الاشتراك) ──────────
 
   // GET all coupons
-  app.get('/admin/subscription-coupons', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/subscription-coupons', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req: any, reply) => {
     const coupons = await prisma.subscriptionCoupon.findMany({
       include: { _count: { select: { usages: true } } },
       orderBy: { createdAt: 'desc' },
@@ -1886,7 +2199,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST create coupon
-  app.post('/admin/subscription-coupons', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.post('/admin/subscription-coupons', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req: any, reply) => {
     const { code, description, type, value, maxUses, applicablePlan, validFrom, validTo } = req.body as any
     if (!code || !type || value === undefined) return reply.code(400).send({ error: 'code, type, value required' })
     const existing = await prisma.subscriptionCoupon.findUnique({ where: { code: code.toUpperCase() } })
@@ -1907,7 +2220,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PATCH update coupon
-  app.patch('/admin/subscription-coupons/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.patch('/admin/subscription-coupons/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req: any, reply) => {
     const { id } = req.params as any
     const { isActive, description, maxUses, validFrom, validTo, commissionRate } = req.body as any
     const coupon = await prisma.subscriptionCoupon.update({
@@ -1924,7 +2237,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE coupon
-  app.delete('/admin/subscription-coupons/:id', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.delete('/admin/subscription-coupons/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canEditPlans')] }, async (req: any, reply) => {
     const { id } = req.params as any
     await prisma.subscriptionCoupon.delete({ where: { id } })
     return reply.send({ success: true })
@@ -1933,7 +2246,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────── MERCHANT REFERRALS (إحالات التجار) ────────────
 
   // GET all merchant referrals
-  app.get('/admin/merchant-referrals', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.get('/admin/merchant-referrals', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { status, page = '1' } = req.query as any
     const where: any = {}
     if (status) where.status = status
@@ -1955,7 +2268,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PATCH mark referral as rewarded
-  app.patch('/admin/merchant-referrals/:id/reward', { preHandler: [authenticate, requireAdmin] }, async (req: any, reply) => {
+  app.patch('/admin/merchant-referrals/:id/reward', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req: any, reply) => {
     const { id } = req.params as any
     const { rewardAmount } = req.body as any
     const referral = await prisma.merchantReferral.update({
@@ -1971,7 +2284,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── ADVANCED ANALYTICS ─────────────────────────────────────────────────────
 
-  app.get('/admin/analytics/advanced', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/analytics/advanced', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (_req, reply) => {
     const now = new Date()
     const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
@@ -2002,7 +2315,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ ltv, arpu, growthRate, mrr, prevMrr })
   })
 
-  app.get('/admin/analytics/at-risk', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/analytics/at-risk', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (_req, reply) => {
     const now = new Date()
     const in14Days = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const ago60Days = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000)
@@ -2047,7 +2360,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── CSV EXPORTS ─────────────────────────────────────────────────────────────
 
-  app.get('/admin/export/invoices', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/export/invoices', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (_req, reply) => {
     const invoices = await prisma.billingInvoice.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
@@ -2075,7 +2388,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send(csv)
   })
 
-  app.get('/admin/export/merchants', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/export/merchants', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewMerchants')] }, async (_req, reply) => {
     const merchants = await prisma.merchant.findMany({
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { stores: true } } },
@@ -2101,7 +2414,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send(csv)
   })
 
-  app.get('/admin/export/financial-report', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/export/financial-report', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     const { year, month } = req.query as { year?: string; month?: string }
     const now = new Date()
     const y = year ? parseInt(year) : now.getFullYear()
@@ -2139,88 +2452,9 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send(csv)
   })
 
-  // ─── LAYER 9: KYC ────────────────────────────────────────────────────────────
-
-  // GET /admin/kyc — all KYC documents with merchant info
-  app.get('/admin/kyc', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
-    const { status, page = '1' } = req.query as { status?: string; page?: string }
-    const take = 20
-    const skip = (parseInt(page) - 1) * take
-    const where = status ? { status } : {}
-    const [docs, total] = await Promise.all([
-      prisma.kycDocument.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          merchant: { select: { id: true, email: true, firstName: true, lastName: true, kycStatus: true } },
-        },
-      }),
-      prisma.kycDocument.count({ where }),
-    ])
-    return reply.send({ docs, total, page: parseInt(page), pages: Math.ceil(total / take) })
-  })
-
-  // PATCH /admin/kyc/:id/review — approve or reject a KYC document
-  app.patch('/admin/kyc/:id/review', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
-    const { id } = req.params as any
-    const { status, reviewNote } = req.body as { status: 'APPROVED' | 'REJECTED'; reviewNote?: string }
-    const admin = (req as any).user
-
-    const doc = await prisma.kycDocument.update({
-      where: { id },
-      data: {
-        status,
-        reviewNote,
-        reviewedAt: new Date(),
-        reviewedBy: admin.email,
-      },
-    })
-
-    // Update merchant kycStatus based on all their docs
-    const pending = await prisma.kycDocument.count({
-      where: { merchantId: doc.merchantId, status: 'PENDING' },
-    })
-    const approved = await prisma.kycDocument.count({
-      where: { merchantId: doc.merchantId, status: 'APPROVED' },
-    })
-    const rejected = await prisma.kycDocument.count({
-      where: { merchantId: doc.merchantId, status: 'REJECTED' },
-    })
-    let kycStatus = 'PENDING'
-    if (rejected > 0) kycStatus = 'REJECTED'
-    else if (pending === 0 && approved > 0) kycStatus = 'APPROVED'
-
-    await prisma.merchant.update({ where: { id: doc.merchantId }, data: { kycStatus } })
-
-    return reply.send({ doc, kycStatus })
-  })
-
-  // POST /admin/kyc — manually add a KYC document for a merchant (admin-side)
-  app.post('/admin/kyc', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
-    const { merchantId, type, fileUrl, fileName } = req.body as any
-    const doc = await prisma.kycDocument.create({
-      data: { merchantId, type, fileUrl, fileName: fileName ?? null },
-    })
-    await prisma.merchant.update({ where: { id: merchantId }, data: { kycStatus: 'PENDING' } })
-    return reply.status(201).send({ doc })
-  })
-
-  // GET /admin/kyc/stats
-  app.get('/admin/kyc/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
-    const [pending, approved, rejected, total] = await Promise.all([
-      prisma.kycDocument.count({ where: { status: 'PENDING' } }),
-      prisma.kycDocument.count({ where: { status: 'APPROVED' } }),
-      prisma.kycDocument.count({ where: { status: 'REJECTED' } }),
-      prisma.kycDocument.count(),
-    ])
-    return reply.send({ pending, approved, rejected, total })
-  })
-
   // ─── LAYER 9: BLACKLIST ───────────────────────────────────────────────────────
 
-  app.get('/admin/blacklist', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/blacklist', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { type, search, page = '1' } = req.query as { type?: string; search?: string; page?: string }
     const take = 20
     const skip = (parseInt(page) - 1) * take
@@ -2234,7 +2468,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ items, total, pages: Math.ceil(total / take) })
   })
 
-  app.post('/admin/blacklist', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/blacklist', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { type, value, reason } = req.body as { type: string; value: string; reason?: string }
     const admin = (req as any).user
     try {
@@ -2247,13 +2481,13 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   })
 
-  app.delete('/admin/blacklist/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/blacklist/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     await prisma.blacklist.delete({ where: { id } })
     return reply.send({ ok: true })
   })
 
-  app.patch('/admin/blacklist/:id/toggle', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/blacklist/:id/toggle', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const item = await prisma.blacklist.findUniqueOrThrow({ where: { id } })
     const updated = await prisma.blacklist.update({ where: { id }, data: { isActive: !item.isActive } })
@@ -2262,13 +2496,13 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 9: LEGAL PAGES ────────────────────────────────────────────────────
 
-  app.get('/admin/legal/:type', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/legal/:type', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req, reply) => {
     const { type } = req.params as { type: string }
     const page = await prisma.legalPage.findUnique({ where: { type } })
     return reply.send({ page: page ?? null })
   })
 
-  app.put('/admin/legal/:type', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.put('/admin/legal/:type', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req, reply) => {
     const { type } = req.params as { type: string }
     const { title, content } = req.body as { title: string; content: string }
     const admin = (req as any).user
@@ -2281,7 +2515,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET /admin/terms-acceptance — log of merchants accepting terms
-  app.get('/admin/terms-acceptance', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/terms-acceptance', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { page = '1' } = req.query as { page?: string }
     const take = 30
     const skip = (parseInt(page) - 1) * take
@@ -2301,14 +2535,14 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 9: PLATFORM SETTINGS ──────────────────────────────────────────────
 
-  app.get('/admin/platform-settings', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/platform-settings', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const rows = await prisma.platformSetting.findMany()
     const settings: Record<string, string> = {}
     rows.forEach((r) => { settings[r.key] = r.value })
     return reply.send({ settings })
   })
 
-  app.put('/admin/platform-settings', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.put('/admin/platform-settings', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const updates = req.body as Record<string, string>
     await Promise.all(
       Object.entries(updates).map(([key, value]) =>
@@ -2324,12 +2558,12 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 10: FEATURE FLAGS ──────────────────────────────────────────────────
 
-  app.get('/admin/feature-flags', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/feature-flags', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const flags = await prisma.featureFlag.findMany({ orderBy: { createdAt: 'desc' } })
     return reply.send({ flags })
   })
 
-  app.post('/admin/feature-flags', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/feature-flags', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { key, name, description } = req.body as any
     const flag = await prisma.featureFlag.create({
       data: { key: key.trim().toLowerCase().replace(/\s+/g, '_'), name, description },
@@ -2337,7 +2571,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ flag })
   })
 
-  app.patch('/admin/feature-flags/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/feature-flags/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const { isEnabled, enabledForPlans, betaMerchantIds, name, description } = req.body as any
     const data: any = {}
@@ -2350,7 +2584,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ flag })
   })
 
-  app.delete('/admin/feature-flags/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/feature-flags/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     await prisma.featureFlag.delete({ where: { id } })
     return reply.send({ ok: true })
@@ -2358,13 +2592,13 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 10: MAINTENANCE MODE ───────────────────────────────────────────────
 
-  app.get('/admin/maintenance', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/maintenance', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const windows = await prisma.maintenanceWindow.findMany({ orderBy: { createdAt: 'desc' }, take: 20 })
     const active = windows.find((w) => w.isActive) ?? null
     return reply.send({ windows, active })
   })
 
-  app.post('/admin/maintenance', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/maintenance', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { title, message, scheduledStart, scheduledEnd, notifyMerchants } = req.body as any
     const admin = (req as any).user
     const window = await prisma.maintenanceWindow.create({
@@ -2380,7 +2614,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ window })
   })
 
-  app.patch('/admin/maintenance/:id/activate', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/maintenance/:id/activate', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     // Deactivate all others first
     await prisma.maintenanceWindow.updateMany({ where: { isActive: true }, data: { isActive: false } })
@@ -2388,13 +2622,13 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ window })
   })
 
-  app.patch('/admin/maintenance/:id/deactivate', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/maintenance/:id/deactivate', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const window = await prisma.maintenanceWindow.update({ where: { id }, data: { isActive: false } })
     return reply.send({ window })
   })
 
-  app.delete('/admin/maintenance/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/maintenance/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     await prisma.maintenanceWindow.delete({ where: { id } })
     return reply.send({ ok: true })
@@ -2402,12 +2636,12 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 10: RATE LIMIT CONFIGS ────────────────────────────────────────────
 
-  app.get('/admin/rate-limits', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/rate-limits', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const configs = await prisma.rateLimitConfig.findMany({ orderBy: { plan: 'asc' } })
     return reply.send({ configs })
   })
 
-  app.put('/admin/rate-limits/:plan', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.put('/admin/rate-limits/:plan', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { plan } = req.params as any
     const { reqPerMinute, reqPerDay, burstLimit } = req.body as any
     const config = await prisma.rateLimitConfig.upsert({
@@ -2420,7 +2654,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 10: QUEUE MONITORING ───────────────────────────────────────────────
 
-  app.get('/admin/queue/stats', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/queue/stats', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (_req, reply) => {
     const [pending, running, done, failed, recentErrors] = await Promise.all([
       prisma.importJob.count({ where: { status: 'PENDING' } }),
       prisma.importJob.count({ where: { status: 'RUNNING' } }),
@@ -2436,7 +2670,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ jobs: { pending, running, done, failed }, recentErrors })
   })
 
-  app.get('/admin/queue/jobs', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/queue/jobs', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (req, reply) => {
     const { status, page = '1' } = req.query as { status?: string; page?: string }
     const take = 20
     const skip = (parseInt(page) - 1) * take
@@ -2461,7 +2695,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // The storefront reads this to know it must re-fetch
   const cacheInvalidations: Record<string, number> = {}
 
-  app.post('/admin/cache/invalidate', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/cache/invalidate', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { storeId } = req.body as { storeId?: string }
     if (storeId) {
       cacheInvalidations[storeId] = Date.now()
@@ -2472,7 +2706,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, timestamp: Date.now(), storeId: storeId ?? 'global' })
   })
 
-  app.get('/admin/cache/status', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/cache/status', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (_req, reply) => {
     const entries = Object.entries(cacheInvalidations).map(([storeId, ts]) => ({
       storeId,
       invalidatedAt: new Date(ts).toISOString(),
@@ -2482,12 +2716,12 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 11: BULK CAMPAIGNS (Email + SMS) ────────────────────────────────
 
-  app.get('/admin/communications/campaigns', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/communications/campaigns', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const campaigns = await prisma.bulkCampaign.findMany({ orderBy: { createdAt: 'desc' } })
     return reply.send({ campaigns })
   })
 
-  app.post('/admin/communications/campaigns', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/communications/campaigns', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { type, subject, body, targetPlan, targetRegion, scheduledAt } = req.body as {
       type: string; subject?: string; body: string; targetPlan?: string; targetRegion?: string; scheduledAt?: string
     }
@@ -2499,7 +2733,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ campaign })
   })
 
-  app.post('/admin/communications/campaigns/:id/send', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/communications/campaigns/:id/send', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const campaign = await prisma.bulkCampaign.findUnique({ where: { id } })
     if (!campaign) return reply.status(404).send({ error: 'الحملة غير موجودة' })
@@ -2547,7 +2781,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ campaign: updated, sent })
   })
 
-  app.delete('/admin/communications/campaigns/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/communications/campaigns/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     await prisma.bulkCampaign.delete({ where: { id } })
     return reply.send({ ok: true })
@@ -2555,12 +2789,12 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 11: STATUS PAGE INCIDENTS ──────────────────────────────────────
 
-  app.get('/admin/status/incidents', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/status/incidents', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const incidents = await prisma.platformIncident.findMany({ orderBy: { createdAt: 'desc' }, take: 100 })
     return reply.send({ incidents })
   })
 
-  app.post('/admin/status/incidents', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/status/incidents', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { title, type, status, isPublic, message } = req.body as {
       title: string; type?: string; status?: string; isPublic?: boolean; message?: string
     }
@@ -2572,7 +2806,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ incident })
   })
 
-  app.patch('/admin/status/incidents/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/status/incidents/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { status, title, isPublic, updateMessage } = req.body as {
       status?: string; title?: string; isPublic?: boolean; updateMessage?: string
@@ -2592,7 +2826,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ incident })
   })
 
-  app.delete('/admin/status/incidents/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/status/incidents/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     await prisma.platformIncident.delete({ where: { id } })
     return reply.send({ ok: true })
@@ -2600,7 +2834,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // ─── LAYER 12: MERCHANT SUBSCRIPTION PAYMENTS (Admin) ─────────────────────
 
-  app.get('/admin/merchant-payments', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/merchant-payments', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (req, reply) => {
     const { page = '1', status, storeId } = req.query as { page?: string; status?: string; storeId?: string }
     const take = 30
     const skip = (parseInt(page) - 1) * take
@@ -2621,7 +2855,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ payments, total, page: parseInt(page), pages: Math.ceil(total / take) })
   })
 
-  app.patch('/admin/merchant-payments/:id/grace', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/merchant-payments/:id/grace', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { days = 7 } = req.body as { days?: number }
     const payment = await prisma.merchantPayment.findUnique({ where: { id } })
@@ -2634,7 +2868,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, gracePeriodEnds })
   })
 
-  app.patch('/admin/merchant-payments/:id/paid', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/merchant-payments/:id/paid', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const updated = await prisma.merchantPayment.update({
       where: { id },
@@ -2648,7 +2882,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─── LAYER 13: API MANAGEMENT ────────────────────────────────────────────
 
   // GET  /admin/api-keys — list all stores with API key info
-  app.get('/admin/api-keys', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/api-keys', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const stores = await prisma.store.findMany({
       select: {
         id: true,
@@ -2685,7 +2919,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST /admin/api-keys/:storeId/regenerate — regenerate API key for a store
-  app.post('/admin/api-keys/:storeId/regenerate', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/api-keys/:storeId/regenerate', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { storeId } = req.params as { storeId: string }
     const newKey = `bz_sk_${crypto.randomBytes(24).toString('hex')}`
     const store = await prisma.store.update({
@@ -2701,7 +2935,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PATCH /admin/api-keys/:storeId/toggle — enable/disable API key
-  app.patch('/admin/api-keys/:storeId/toggle', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/api-keys/:storeId/toggle', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { storeId } = req.params as { storeId: string }
     const { enabled } = req.body as { enabled: boolean }
     const store = await prisma.store.update({
@@ -2713,7 +2947,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET /admin/api-keys/:storeId/usage — paginated usage logs for one store
-  app.get('/admin/api-keys/:storeId/usage', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/api-keys/:storeId/usage', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { storeId } = req.params as { storeId: string }
     const { page = 1, limit = 50 } = req.query as { page?: number; limit?: number }
     const skip = (Number(page) - 1) * Number(limit)
@@ -2732,7 +2966,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET /admin/api-keys/usage/stats — platform-wide usage stats
-  app.get('/admin/api-keys/usage/stats', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/api-keys/usage/stats', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const now = new Date()
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const weekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
@@ -2801,10 +3035,122 @@ export async function adminRoutes(app: FastifyInstance) {
     })
   })
 
+  // ── Launch readiness review ──────────────────────────────────────────────
+  app.get('/launch-readiness', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewAuditLog')] }, async (_req, reply) => {
+    const last7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+
+    const [
+      pendingApps,
+      approvedApps,
+      pendingThemes,
+      approvedThemes,
+      pendingPartners,
+      approvedPartners,
+      webhookDeliveries,
+      failedWebhookDeliveries,
+      activeIncidents,
+      publishedChangelogCount,
+      latestChangelog,
+    ] = await Promise.all([
+      prisma.app.count({ where: { isApproved: false, isActive: true } }),
+      prisma.app.count({ where: { isApproved: true, isActive: true } }),
+      prisma.theme.count({ where: { isApproved: false, isActive: true } }),
+      prisma.theme.count({ where: { isApproved: true, isActive: true } }),
+      prisma.partner.count({ where: { status: 'PENDING' } }),
+      prisma.partner.count({ where: { status: 'APPROVED' } }),
+      prisma.webhookLog.count({ where: { createdAt: { gte: last7d } } }),
+      prisma.webhookLog.count({ where: { createdAt: { gte: last7d }, success: false } }),
+      prisma.platformIncident.count({ where: { status: { not: 'RESOLVED' } } }),
+      prisma.apiChangelog.count({ where: { isPublished: true } }),
+      prisma.apiChangelog.findFirst({
+        where: { isPublished: true },
+        orderBy: { publishedAt: 'desc' },
+        select: { version: true, title: true, publishedAt: true },
+      }),
+    ])
+
+    const webhookFailureRate = webhookDeliveries > 0
+      ? Number(((failedWebhookDeliveries / webhookDeliveries) * 100).toFixed(1))
+      : 0
+
+    const checklist = [
+      {
+        id: 'governance-queue',
+        title: 'Marketplace governance queue',
+        status: pendingApps + pendingThemes + pendingPartners === 0 ? 'pass' : 'block',
+        detail: pendingApps + pendingThemes + pendingPartners === 0
+          ? 'لا توجد عناصر pending في apps/themes/partners.'
+          : `يوجد ${pendingApps} تطبيقات و${pendingThemes} ثيمات و${pendingPartners} شركاء بانتظار القرار.`,
+      },
+      {
+        id: 'webhook-reliability',
+        title: 'Webhook delivery reliability',
+        status: webhookFailureRate <= 5 ? 'pass' : webhookFailureRate <= 15 ? 'warn' : 'block',
+        detail: webhookDeliveries === 0
+          ? 'لا توجد deliveries خلال آخر 7 أيام، راقب أول موجة تشغيلية قبل sign-off.'
+          : `معدل الفشل ${webhookFailureRate}% عبر ${webhookDeliveries} محاولة تسليم خلال آخر 7 أيام.`,
+      },
+      {
+        id: 'public-api-release-notes',
+        title: 'Public API release notes',
+        status: publishedChangelogCount > 0 ? 'pass' : 'warn',
+        detail: publishedChangelogCount > 0
+          ? `آخر changelog منشور: ${latestChangelog?.version ?? 'v1'} — ${latestChangelog?.title ?? 'بدون عنوان'}.`
+          : 'لا يوجد changelog منشور بعد لمسار public API.',
+      },
+      {
+        id: 'incident-state',
+        title: 'Active platform incidents',
+        status: activeIncidents === 0 ? 'pass' : 'block',
+        detail: activeIncidents === 0
+          ? 'لا توجد incidents غير محلولة حالياً.'
+          : `يوجد ${activeIncidents} incidents غير محلولة تمنع sign-off التنفيذي.`,
+      },
+      {
+        id: 'ecosystem-coverage',
+        title: 'Approved ecosystem coverage',
+        status: approvedApps > 0 && approvedThemes > 0 && approvedPartners > 0 ? 'pass' : 'warn',
+        detail: `المعتمد حالياً: ${approvedApps} تطبيقات، ${approvedThemes} ثيمات، ${approvedPartners} شركاء.`,
+      },
+    ] as const
+
+    const blockers = checklist.filter((item) => item.status === 'block').length
+    const warnings = checklist.filter((item) => item.status === 'warn').length
+
+    return reply.send({
+      generatedAt: new Date().toISOString(),
+      status: blockers === 0 ? 'ready' : 'blocked',
+      summary: {
+        blockers,
+        warnings,
+        readyForExecutiveSignOff: blockers === 0,
+      },
+      governance: {
+        apps: { pending: pendingApps, approved: approvedApps },
+        themes: { pending: pendingThemes, approved: approvedThemes },
+        partners: { pending: pendingPartners, approved: approvedPartners },
+      },
+      operations: {
+        webhookDeliveries,
+        failedWebhookDeliveries,
+        webhookFailureRate,
+        activeIncidents,
+      },
+      api: {
+        publicContract: '/api/public/v1/contract',
+        webhookContract: '/api/v1/webhooks/contract',
+        publishedChangelogCount,
+        latestChangelog,
+        sdks: ['javascript', 'python', 'php'],
+      },
+      checklist,
+    })
+  })
+
   // ── API Changelog ─────────────────────────────────────────────────────────
 
   // GET /admin/api-changelog
-  app.get('/admin/api-changelog', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/api-changelog', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (_req, reply) => {
     const entries = await prisma.apiChangelog.findMany({
       orderBy: { publishedAt: 'desc' },
     })
@@ -2812,7 +3158,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // POST /admin/api-changelog
-  app.post('/admin/api-changelog', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/api-changelog', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req, reply) => {
     const { version, title, description, type, isPublished, publishedAt } =
       req.body as {
         version: string
@@ -2829,7 +3175,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // PATCH /admin/api-changelog/:id
-  app.patch('/admin/api-changelog/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/api-changelog/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const data = req.body as Partial<{ version: string; title: string; description: string; type: string; isPublished: boolean; publishedAt: string }>
     const entry = await prisma.apiChangelog.update({
@@ -2843,7 +3189,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE /admin/api-changelog/:id
-  app.delete('/admin/api-changelog/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/api-changelog/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageContent')] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     await prisma.apiChangelog.delete({ where: { id } })
     return reply.send({ ok: true })
@@ -2852,7 +3198,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─── LAYER 14: ADVANCED SECURITY ─────────────────────────────────────────
 
   // GET /admin/security/overview — security dashboard stats
-  app.get('/admin/security/overview', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/security/overview', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const now = new Date()
     const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000)
     const last7d  = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
@@ -2906,13 +3252,13 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET /admin/security/settings
-  app.get('/admin/security/settings', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/security/settings', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const settings = await prisma.securitySettings.findUnique({ where: { id: 'platform' } })
     return reply.send({ settings: settings ?? null })
   })
 
   // PATCH /admin/security/settings — upsert security settings
-  app.patch('/admin/security/settings', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/security/settings', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const data = req.body as Partial<{
       require2FAForAdmins: boolean
       ipWhitelistEnabled: boolean
@@ -2933,13 +3279,13 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET /admin/security/ip-whitelist
-  app.get('/admin/security/ip-whitelist', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/security/ip-whitelist', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const entries = await prisma.adminIpWhitelist.findMany({ orderBy: { createdAt: 'desc' } })
     return reply.send({ entries })
   })
 
   // POST /admin/security/ip-whitelist
-  app.post('/admin/security/ip-whitelist', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/security/ip-whitelist', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { ip, label } = req.body as { ip: string; label?: string }
     // Validate basic IP format (IPv4 or IPv6 or CIDR not expanded — just sanity check)
     if (!ip || !/^[\d.a-fA-F:]+$/.test(ip)) {
@@ -2955,14 +3301,14 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE /admin/security/ip-whitelist/:id
-  app.delete('/admin/security/ip-whitelist/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/security/ip-whitelist/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as { id: string }
     await prisma.adminIpWhitelist.delete({ where: { id } })
     return reply.send({ ok: true })
   })
 
   // GET /admin/security/login-attempts — paginated login attempt log
-  app.get('/admin/security/login-attempts', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.get('/admin/security/login-attempts', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { page = 1, limit = 50, ip, failedOnly } = req.query as { page?: number; limit?: number; ip?: string; failedOnly?: string }
     const skip = (Number(page) - 1) * Number(limit)
 
@@ -2979,7 +3325,7 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // GET /admin/security/banned-ips — IPs currently auto-banned
-  app.get('/admin/security/banned-ips', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/security/banned-ips', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const settings = await prisma.securitySettings.findUnique({ where: { id: 'platform' } })
     const banMinutes  = settings?.banDurationMinutes ?? 30
     const maxAttempts = settings?.maxLoginAttempts ?? 5
@@ -2998,14 +3344,14 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // DELETE /admin/security/banned-ips/:ip — unban by deleting recent failures
-  app.delete('/admin/security/banned-ips/:ip', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/security/banned-ips/:ip', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const ip = decodeURIComponent((req.params as any).ip)
     await prisma.loginAttempt.deleteMany({ where: { ip, success: false } })
     return reply.send({ ok: true, message: `تم رفع الحظر عن ${ip}` })
   })
 
   // GET /admin/security/admin-2fa — list all admins with 2FA status
-  app.get('/admin/security/admin-2fa', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/security/admin-2fa', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const admins = await prisma.merchant.findMany({
       where: { isAdmin: true },
       select: {
@@ -3022,12 +3368,12 @@ export async function adminRoutes(app: FastifyInstance) {
   // ─────────────────────────────────────────────────────────────────────────
 
   // ── Languages ────────────────────────────────────────────────────────────
-  app.get('/admin/localization/languages', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/localization/languages', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const languages = await prisma.supportedLanguage.findMany({ orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { code: 'asc' }] })
     return reply.send({ languages })
   })
 
-  app.post('/admin/localization/languages', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/localization/languages', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { code, name, nameAr, direction = 'ltr', isActive = true, isDefault = false, sortOrder = 0 } = req.body as any
     if (!code || !name || !nameAr) return reply.status(400).send({ error: 'code, name, nameAr مطلوبة' })
     // If setting as default, unset others
@@ -3036,7 +3382,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ language: lang })
   })
 
-  app.patch('/admin/localization/languages/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/localization/languages/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const body = req.body as any
     if (body.isDefault) await prisma.supportedLanguage.updateMany({ where: { id: { not: id } }, data: { isDefault: false } })
@@ -3044,7 +3390,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ language: lang })
   })
 
-  app.delete('/admin/localization/languages/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/localization/languages/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const lang = await prisma.supportedLanguage.findUnique({ where: { id } })
     if (!lang) return reply.status(404).send({ error: 'اللغة غير موجودة' })
@@ -3054,12 +3400,12 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Currencies ────────────────────────────────────────────────────────────
-  app.get('/admin/localization/currencies', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/localization/currencies', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const currencies = await prisma.supportedCurrency.findMany({ orderBy: [{ baseCurrency: 'desc' }, { code: 'asc' }] })
     return reply.send({ currencies })
   })
 
-  app.post('/admin/localization/currencies', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/localization/currencies', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { code, name, nameAr, symbol, symbolAr, exchangeRate = 1, baseCurrency = false, decimalPlaces = 3, isActive = true } = req.body as any
     if (!code || !name || !nameAr || !symbol) return reply.status(400).send({ error: 'code, name, nameAr, symbol مطلوبة' })
     if (baseCurrency) await prisma.supportedCurrency.updateMany({ data: { baseCurrency: false } })
@@ -3067,7 +3413,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ currency })
   })
 
-  app.patch('/admin/localization/currencies/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/localization/currencies/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const body = req.body as any
     if (body.baseCurrency) await prisma.supportedCurrency.updateMany({ where: { id: { not: id } }, data: { baseCurrency: false } })
@@ -3075,7 +3421,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ currency })
   })
 
-  app.delete('/admin/localization/currencies/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/localization/currencies/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const currency = await prisma.supportedCurrency.findUnique({ where: { id } })
     if (!currency) return reply.status(404).send({ error: 'العملة غير موجودة' })
@@ -3085,12 +3431,12 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Countries ─────────────────────────────────────────────────────────────
-  app.get('/admin/localization/countries', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/localization/countries', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const countries = await prisma.supportedCountry.findMany({ orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { code: 'asc' }] })
     return reply.send({ countries })
   })
 
-  app.post('/admin/localization/countries', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.post('/admin/localization/countries', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { code, name, nameAr, phonePrefix, currencyCode, isActive = true, isDefault = false, sortOrder = 0 } = req.body as any
     if (!code || !name || !nameAr) return reply.status(400).send({ error: 'code, name, nameAr مطلوبة' })
     if (isDefault) await prisma.supportedCountry.updateMany({ data: { isDefault: false } })
@@ -3098,7 +3444,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.status(201).send({ country })
   })
 
-  app.patch('/admin/localization/countries/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/localization/countries/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const body = req.body as any
     if (body.isDefault) await prisma.supportedCountry.updateMany({ where: { id: { not: id } }, data: { isDefault: false } })
@@ -3106,7 +3452,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ country })
   })
 
-  app.delete('/admin/localization/countries/:id', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.delete('/admin/localization/countries/:id', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const { id } = req.params as any
     const country = await prisma.supportedCountry.findUnique({ where: { id } })
     if (!country) return reply.status(404).send({ error: 'الدولة غير موجودة' })
@@ -3116,13 +3462,13 @@ export async function adminRoutes(app: FastifyInstance) {
   })
 
   // ── Platform Config ───────────────────────────────────────────────────────
-  app.get('/admin/localization/platform-config', { preHandler: [authenticate, requireAdmin] }, async (_req, reply) => {
+  app.get('/admin/localization/platform-config', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (_req, reply) => {
     const config = await prisma.platformConfig.findUnique({ where: { id: 'platform' } })
     // Return defaults if not yet seeded
     return reply.send({ config: config ?? { id: 'platform', platformName: 'BahrainStore', platformNameAr: 'بحرين ستور', primaryColor: '#3b82f6', secondaryColor: '#8b5cf6', accentColor: '#06b6d4', baseCurrency: 'BHD', defaultLanguage: 'ar' } })
   })
 
-  app.patch('/admin/localization/platform-config', { preHandler: [authenticate, requireAdmin] }, async (req, reply) => {
+  app.patch('/admin/localization/platform-config', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (req, reply) => {
     const body = req.body as any
     // Strip id to avoid conflicts
     delete body.id

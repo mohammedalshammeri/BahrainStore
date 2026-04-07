@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth.middleware'
+import { findMerchantLoan, findMerchantStore } from '../lib/merchant-ownership'
+import { authenticate, requireAdmin, requireFullPlatformAdmin, requirePlatformPermission } from '../middleware/auth.middleware'
 
 // ─── Bazar Finance — Merchant Advance Financing ───────────────────────────────
 // Merchants apply for cash advances based on their sales history
@@ -63,8 +64,9 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
     const { storeId } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
-    const store = await prisma.store.findUnique({ where: { id: storeId }, select: { name: true, currency: true } })
-    if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
+    const merchantId = (request.user as any).id
+    const store = await prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { id: true, name: true, currency: true } })
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const eligibility = await calculateEligibility(storeId)
 
@@ -84,14 +86,17 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
   app.post('/apply', { preHandler: authenticate }, async (request, reply) => {
     const schema = z.object({
       storeId: z.string(),
-      merchantId: z.string(),
       requestedAmount: z.number().positive().max(50000),
       purpose: z.string().optional(),
     })
 
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: parsed.error.flatten() })
-    const { storeId, merchantId, requestedAmount, purpose } = parsed.data
+    const merchantId = (request.user as any).id
+    const { storeId, requestedAmount, purpose } = parsed.data
+
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const eligibility = await calculateEligibility(storeId)
     if (!eligibility.eligible) {
@@ -128,6 +133,10 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
     const { storeId } = request.query as any
     if (!storeId) return reply.status(400).send({ error: 'storeId مطلوب' })
 
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
     const loans = await prisma.merchantLoan.findMany({
       where: { storeId },
       include: {
@@ -151,6 +160,11 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
   // ─── GET /bazar-finance/loans/:id ─────────────────────────────────────────
   app.get('/loans/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as any
+
+    const merchantId = (request.user as any).id
+    const ownedLoan = await findMerchantLoan(merchantId, id)
+    if (!ownedLoan) return reply.status(403).send({ error: 'غير مصرح' })
+
     const loan = await prisma.merchantLoan.findUnique({
       where: { id },
       include: { repayments: { orderBy: { createdAt: 'desc' } } },
@@ -161,7 +175,7 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
 
   // ─── PATCH /bazar-finance/loans/:id/approve ───────────────────────────────
   // Admin: approve and disburse a loan
-  app.patch('/loans/:id/approve', { preHandler: authenticate }, async (request, reply) => {
+  app.patch('/loans/:id/approve', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { id } = request.params as any
     const schema = z.object({ approvedAmount: z.number().positive() })
     const parsed = schema.safeParse(request.body)
@@ -185,7 +199,7 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
   })
 
   // ─── PATCH /bazar-finance/loans/:id/disburse ──────────────────────────────
-  app.patch('/loans/:id/disburse', { preHandler: authenticate }, async (request, reply) => {
+  app.patch('/loans/:id/disburse', { preHandler: [authenticate, requireAdmin, requireFullPlatformAdmin] }, async (request, reply) => {
     const { id } = request.params as any
     const loan = await prisma.merchantLoan.findUnique({ where: { id } })
     if (!loan) return reply.status(404).send({ error: 'القرض غير موجود' })
@@ -210,6 +224,10 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
 
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
+
+    const merchantId = (request.user as any).id
+    const ownedLoan = await findMerchantLoan(merchantId, id)
+    if (!ownedLoan) return reply.status(403).send({ error: 'غير مصرح' })
 
     const loan = await prisma.merchantLoan.findUnique({ where: { id } })
     if (!loan) return reply.status(404).send({ error: 'القرض غير موجود' })
@@ -247,7 +265,7 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
 
   // ─── GET /bazar-finance/dashboard ─────────────────────────────────────────
   // Overview stats for admin finance dashboard
-  app.get('/dashboard', { preHandler: authenticate }, async (_request, reply) => {
+  app.get('/dashboard', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canViewFinancials')] }, async (_request, reply) => {
     const [pending, disbursed, repaying, totalDisbursed, totalRepaid] = await Promise.all([
       prisma.merchantLoan.count({ where: { status: 'PENDING' } }),
       prisma.merchantLoan.count({ where: { status: 'DISBURSED' } }),
@@ -274,6 +292,10 @@ export async function bazarFinanceRoutes(app: FastifyInstance) {
   app.get('/auto-repayment/:storeId', { preHandler: authenticate }, async (request, reply) => {
     const { storeId } = request.params as any
     const { orderTotal } = request.query as any
+
+    const merchantId = (request.user as any).id
+    const store = await findMerchantStore(merchantId, storeId)
+    if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
     const activeLoan = await prisma.merchantLoan.findFirst({
       where: { storeId, status: { in: ['DISBURSED', 'REPAYING'] } },

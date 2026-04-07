@@ -1,15 +1,35 @@
 import axios from "axios";
 import Cookies from "js-cookie";
+import { getPublicApiUrl } from "@/lib/env";
 
 export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1",
+  baseURL: getPublicApiUrl(),
   headers: { "Content-Type": "application/json" },
   withCredentials: false,
 });
 
+function cookieOptions(expires?: number): Cookies.CookieAttributes {
+  const isSecureContext = typeof window !== "undefined" && window.location.protocol === "https:";
+
+  return {
+    expires,
+    sameSite: "Strict",
+    secure: isSecureContext,
+    path: "/",
+  };
+}
+
+export function getAccessToken() {
+  return Cookies.get("accessToken") ?? null;
+}
+
+export function getRefreshToken() {
+  return Cookies.get("refreshToken") ?? null;
+}
+
 // ─── Request Interceptor: attach access token ──────────
 api.interceptors.request.use((config) => {
-  const token = Cookies.get("accessToken");
+  const token = getAccessToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -48,7 +68,7 @@ api.interceptors.response.use(
       original._retry = true;
       isRefreshing = true;
 
-      const refreshToken = Cookies.get("refreshToken");
+      const refreshToken = getRefreshToken();
       if (!refreshToken) {
         isRefreshing = false;
         clearAuth();
@@ -58,11 +78,11 @@ api.interceptors.response.use(
 
       try {
         const { data } = await axios.post(
-          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1"}/auth/refresh`,
+          `${getPublicApiUrl()}/auth/refresh`,
           { refreshToken }
         );
         const newToken: string = data.accessToken;
-        Cookies.set("accessToken", newToken, { expires: 1 / 96 }); // 15 min
+        Cookies.set("accessToken", newToken, cookieOptions(1 / 96));
         api.defaults.headers.common.Authorization = `Bearer ${newToken}`;
         processQueue(null, newToken);
         original.headers.Authorization = `Bearer ${newToken}`;
@@ -82,15 +102,15 @@ api.interceptors.response.use(
 );
 
 export function setAuth(accessToken: string, refreshToken: string) {
-  Cookies.set("accessToken", accessToken, { expires: 1 / 96, sameSite: "Strict" });
-  Cookies.set("refreshToken", refreshToken, { expires: 30, sameSite: "Strict" });
+  Cookies.set("accessToken", accessToken, cookieOptions(1 / 96));
+  Cookies.set("refreshToken", refreshToken, cookieOptions(30));
 }
 
 export function clearAuth() {
-  Cookies.remove("accessToken");
-  Cookies.remove("refreshToken");
+  Cookies.remove("accessToken", { path: "/" });
+  Cookies.remove("refreshToken", { path: "/" });
 }
 
 export function isAuthenticated(): boolean {
-  return !!Cookies.get("accessToken") || !!Cookies.get("refreshToken");
+  return !!getAccessToken() || !!getRefreshToken();
 }

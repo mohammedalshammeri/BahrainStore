@@ -154,6 +154,13 @@ export async function appsRoutes(app: FastifyInstance) {
 
     // If storeId given, include installation status
     if (storeId) {
+      await authenticate(request, reply)
+      if (reply.sent) return
+
+      const merchantId = (request.user as any).id
+      const store = await prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { id: true } })
+      if (!store) return reply.status(403).send({ error: 'غير مصرح' })
+
       const installed = await prisma.installedApp.findMany({
         where: { storeId },
         select: { appId: true, isActive: true },

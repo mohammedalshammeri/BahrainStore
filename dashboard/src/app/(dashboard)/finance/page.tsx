@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useAuthStore } from '@/store/auth.store'
 import { api } from '@/lib/api'
+import { getPublicApiUrl } from '@/lib/env'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
@@ -46,7 +47,7 @@ export default function FinancePage() {
   }
 
   async function exportCSV() {
-    const url = `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}/api/v1/finance/export?storeId=${store!.id}&period=${period}&format=csv`
+    const url = `${getPublicApiUrl()}/finance/export?storeId=${store!.id}&period=${period}&format=csv`
     window.open(url, '_blank')
   }
 

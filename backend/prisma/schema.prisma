@@ -14,33 +14,33 @@ datasource db {
 // MERCHANTS (التجار)
 // ─────────────────────────────────────────────
 model Merchant {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  phone         String    @unique
-  passwordHash  String
-  firstName     String
-  lastName      String
-  isVerified    Boolean   @default(false)
-  isActive      Boolean   @default(true)
-  isAdmin       Boolean   @default(false)
-  twoFactorEnabled Boolean @default(false)
-  twoFactorSecret  String?
-  googleId         String?   @unique
-  passwordResetToken    String?   @unique
-  passwordResetExpires  DateTime?
-  lastLoginIp      String?
-  lastLoginAt      DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  phone                String    @unique
+  passwordHash         String
+  firstName            String
+  lastName             String
+  isVerified           Boolean   @default(false)
+  isActive             Boolean   @default(true)
+  isAdmin              Boolean   @default(false)
+  twoFactorEnabled     Boolean   @default(false)
+  twoFactorSecret      String?
+  googleId             String?   @unique
+  passwordResetToken   String?   @unique
+  passwordResetExpires DateTime?
+  lastLoginIp          String?
+  lastLoginAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  kycStatus     String    @default("NONE") // NONE | PENDING | APPROVED | REJECTED
+  kycStatus String @default("NONE") // NONE | PENDING | APPROVED | REJECTED
 
-  stores        Store[]
-  sessions      Session[]
-  staffMemberships StoreStaff[]
+  stores            Store[]
+  sessions          Session[]
+  staffMemberships  StoreStaff[]
   platformReferrals MerchantReferral[]
-  kycDocuments  KycDocument[]
-  termsAcceptances TermsAcceptance[]
+  kycDocuments      KycDocument[]
+  termsAcceptances  TermsAcceptance[]
 
   @@map("merchants")
 }
@@ -48,11 +48,12 @@ model Merchant {
 model Session {
   id           String   @id @default(cuid())
   merchantId   String
+  kind         String   @default("REFRESH")
   refreshToken String   @unique
   expiresAt    DateTime
   createdAt    DateTime @default(now())
 
-  merchant     Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 
   @@map("sessions")
 }
@@ -61,151 +62,153 @@ model Session {
 // STORES (المتاجر)
 // ─────────────────────────────────────────────
 model Store {
-  id           String      @id @default(cuid())
-  merchantId   String
-  name         String
-  nameAr       String
-  slug         String      @unique
-  description  String?
-  descriptionAr String?
-  logo         String?
-  favicon      String?
-  ogImage      String?
-  domain       String?     @unique
-  subdomain    String      @unique
-  currency     String      @default("BHD")
-  language     StoreLanguage @default(BOTH)
-  timezone     String      @default("Asia/Bahrain")
-  vatNumber    String?
-  crNumber     String?
-  vatRate      Decimal     @default(0.05) @db.Decimal(5, 4)
-  isActive     Boolean     @default(true)
-  plan         StorePlan   @default(STARTER)
-  planExpiresAt DateTime?
-  trialEndsAt  DateTime?
-  gracePeriodEnds DateTime?   // grace period after failed subscription payment
-  paymentRetryCount Int      @default(0)
-  apiKey          String?     @unique
-  apiKeyEnabled   Boolean     @default(true)
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id                String        @id @default(cuid())
+  merchantId        String
+  name              String
+  nameAr            String
+  slug              String        @unique
+  description       String?
+  descriptionAr     String?
+  logo              String?
+  favicon           String?
+  ogImage           String?
+  domain            String?       @unique
+  subdomain         String        @unique
+  currency          String        @default("BHD")
+  language          StoreLanguage @default(BOTH)
+  timezone          String        @default("Asia/Bahrain")
+  vatNumber         String?
+  crNumber          String?
+  vatRate           Decimal       @default(0.05) @db.Decimal(5, 4)
+  isActive          Boolean       @default(true)
+  plan              StorePlan     @default(STARTER)
+  planExpiresAt     DateTime?
+  trialEndsAt       DateTime?
+  gracePeriodEnds   DateTime? // grace period after failed subscription payment
+  paymentRetryCount Int           @default(0)
+  apiKey            String?       @unique
+  apiKeyEnabled     Boolean       @default(true)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
-  merchant     Merchant    @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  products     Product[]
-  categories   Category[]
-  orders       Order[]
-  customers    Customer[]
-  coupons      Coupon[]
-  pages        Page[]
-  settings     StoreSettings?
-  staff        StoreStaff[]
-  abandonedCarts AbandonedCart[]
-  pageViews      PageView[]
-  loyaltyTx      LoyaltyTransaction[]
-  billingInvoices BillingInvoice[]
-  installedApps  InstalledApp[]
-  blogPosts      BlogPost[]
-  reviews        Review[]
-  flashSales     FlashSale[]
-  webhooks       Webhook[]
-  referralCodes  ReferralCode[]
-  backInStockSubs BackInStockSubscription[]
-  giftCards      GiftCard[]
-  supportTickets SupportTicket[]
-  onboarding     Onboarding?
-  popups         Popup[]
-  emailCampaigns   EmailCampaign[]
-  emailSubscribers EmailSubscriber[]
-  upsellRules      UpsellRule[]
-  countdownTimers  CountdownTimer[]
+  merchant           Merchant                   @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  products           Product[]
+  categories         Category[]
+  orders             Order[]
+  customers          Customer[]
+  coupons            Coupon[]
+  pages              Page[]
+  settings           StoreSettings?
+  staff              StoreStaff[]
+  abandonedCarts     AbandonedCart[]
+  pageViews          PageView[]
+  loyaltyTx          LoyaltyTransaction[]
+  billingInvoices    BillingInvoice[]
+  installedApps      InstalledApp[]
+  blogPosts          BlogPost[]
+  reviews            Review[]
+  flashSales         FlashSale[]
+  webhooks           Webhook[]
+  referralCodes      ReferralCode[]
+  backInStockSubs    BackInStockSubscription[]
+  giftCards          GiftCard[]
+  supportTickets     SupportTicket[]
+  onboarding         Onboarding?
+  popups             Popup[]
+  emailCampaigns     EmailCampaign[]
+  emailSubscribers   EmailSubscriber[]
+  upsellRules        UpsellRule[]
+  countdownTimers    CountdownTimer[]
   domainVerification DomainVerification?
-  smsCampaigns     SmsCampaign[]
-  pushSubscriptions PushSubscription[]
-  pushCampaigns    PushNotificationCampaign[]
-  posOrders        PosOrder[]
-  posSessions      PosSession[]
-  importJobs       ImportJob[]
-  warehouses       Warehouse[]
-  liveStreams      LiveStream[]
-  liveChatSessions LiveChatSession[]
+  smsCampaigns       SmsCampaign[]
+  pushSubscriptions  PushSubscription[]
+  pushCampaigns      PushNotificationCampaign[]
+  posOrders          PosOrder[]
+  posSessions        PosSession[]
+  importJobs         ImportJob[]
+  warehouses         Warehouse[]
+  liveStreams        LiveStream[]
+  liveChatSessions   LiveChatSession[]
   socialIntegrations SocialIntegration[]
-  b2bInvoices      B2BInvoice[]
-  zatcaInvoices    ZatcaInvoice[]
-  shippingZones    ShippingZone[]
-  shoppingFeed     ShoppingFeed?
-  productViews     ProductView[]
-  themePurchases   ThemePurchase[]
-  subscriptions    CustomerSubscription[]
-  merchantPayments MerchantPayment[]
-  apiUsageLogs     ApiUsageLog[]
+  b2bInvoices        B2BInvoice[]
+  zatcaInvoices      ZatcaInvoice[]
+  shippingZones      ShippingZone[]
+  shoppingFeed       ShoppingFeed?
+  productViews       ProductView[]
+  themePurchases     ThemePurchase[]
+  themeConfigs       StoreThemeConfig[]
+  pageTemplates      StorePageTemplate[]
+  subscriptions      CustomerSubscription[]
+  merchantPayments   MerchantPayment[]
+  apiUsageLogs       ApiUsageLog[]
 
   @@map("stores")
 }
 
 model StoreSettings {
-  id             String  @id @default(cuid())
-  storeId        String  @unique
-  primaryColor   String  @default("#2563eb")
-  secondaryColor String  @default("#f97316")
-  fontFamily     String  @default("Cairo")
-  theme          String  @default("default")
-  showOutOfStock Boolean @default(true)
-  allowReviews   Boolean @default(true)
-  freeShippingMin Decimal? @db.Decimal(10, 3)
-  whatsappEnabled Boolean @default(false)
-  whatsappPhoneId String?
-  whatsappToken   String?
+  id                  String   @id @default(cuid())
+  storeId             String   @unique
+  primaryColor        String   @default("#2563eb")
+  secondaryColor      String   @default("#f97316")
+  fontFamily          String   @default("Cairo")
+  theme               String   @default("default")
+  showOutOfStock      Boolean  @default(true)
+  allowReviews        Boolean  @default(true)
+  freeShippingMin     Decimal? @db.Decimal(10, 3)
+  whatsappEnabled     Boolean  @default(false)
+  whatsappPhoneId     String?
+  whatsappToken       String?
   // SMS (Twilio)
-  smsEnabled      Boolean @default(false)
-  smsTwilioSid    String?
-  smsTwilioToken  String?
-  smsTwilioFrom   String?
+  smsEnabled          Boolean  @default(false)
+  smsTwilioSid        String?
+  smsTwilioToken      String?
+  smsTwilioFrom       String?
   // Aramex
-  aramexEnabled   Boolean @default(false)
-  aramexUser      String?
-  aramexPassword  String?
+  aramexEnabled       Boolean  @default(false)
+  aramexUser          String?
+  aramexPassword      String?
   aramexAccountNumber String?
-  aramexPinCode   String?
+  aramexPinCode       String?
   // DHL
-  dhlEnabled      Boolean @default(false)
-  dhlApiKey       String?
-  dhlAccountNumber String?
+  dhlEnabled          Boolean  @default(false)
+  dhlApiKey           String?
+  dhlAccountNumber    String?
   // Tabby
-  tabbyEnabled    Boolean @default(false)
-  tabbyPublicKey  String?
-  tabbySecretKey  String?
+  tabbyEnabled        Boolean  @default(false)
+  tabbyPublicKey      String?
+  tabbySecretKey      String?
   // Tamara
-  tamaraEnabled   Boolean @default(false)
-  tamaraToken     String?
+  tamaraEnabled       Boolean  @default(false)
+  tamaraToken         String?
   // Apple Pay
-  applePayEnabled    Boolean @default(false)
-  applePayMerchantId String?
+  applePayEnabled     Boolean  @default(false)
+  applePayMerchantId  String?
   // Google Pay
-  googlePayEnabled    Boolean @default(false)
+  googlePayEnabled    Boolean  @default(false)
   googlePayMerchantId String?
   // Tap Payments
-  tapEnabled         Boolean @default(false)
-  tapSecretKey       String?
-  tapPublicKey       String?
-  tapWebhookSecret   String?
+  tapEnabled          Boolean  @default(false)
+  tapSecretKey        String?
+  tapPublicKey        String?
+  tapWebhookSecret    String?
   // Moyasar
-  moyasarEnabled     Boolean @default(false)
-  moyasarSecretKey   String?
-  moyasarPublicKey   String?
+  moyasarEnabled      Boolean  @default(false)
+  moyasarSecretKey    String?
+  moyasarPublicKey    String?
   // Benefit Pay (NBB)
-  benefitEnabled     Boolean @default(false)
-  benefitMerchantId  String?
-  benefitApiKey      String?
+  benefitEnabled      Boolean  @default(false)
+  benefitMerchantId   String?
+  benefitApiKey       String?
   // Loyalty Program (نقاط الولاء)
-  loyaltyEnabled      Boolean @default(false)
-  loyaltyPointsPerBD  Int     @default(10)
-  loyaltyBDPerPoint   Decimal @default(0.01) @db.Decimal(8, 4)
-  loyaltyMinRedeem    Int     @default(100)
-  loyaltyMaxRedeemPct Int     @default(20)
+  loyaltyEnabled      Boolean  @default(false)
+  loyaltyPointsPerBD  Int      @default(10)
+  loyaltyBDPerPoint   Decimal  @default(0.01) @db.Decimal(8, 4)
+  loyaltyMinRedeem    Int      @default(100)
+  loyaltyMaxRedeemPct Int      @default(20)
   // Referral Program (برنامج الإحالة)
-  referralEnabled     Boolean @default(false)
-  referralRewardType  String  @default("FIXED") // FIXED | PERCENTAGE
-  referralRewardValue Decimal @default(1.000) @db.Decimal(10, 3)
+  referralEnabled     Boolean  @default(false)
+  referralRewardType  String   @default("FIXED") // FIXED | PERCENTAGE
+  referralRewardValue Decimal  @default(1.000) @db.Decimal(10, 3)
   referralMinOrder    Decimal? @db.Decimal(10, 3)
   // Marketing Pixels (بكسلات التسويق)
   googleTagId         String?
@@ -214,42 +217,42 @@ model StoreSettings {
   snapchatPixelId     String?
   googleAdsId         String?
   // New Payment Gateways
-  stripeEnabled       Boolean @default(false)
+  stripeEnabled       Boolean  @default(false)
   stripeSecretKey     String?
   stripePublicKey     String?
   stripeWebhookSecret String?
-  paytabsEnabled      Boolean @default(false)
+  paytabsEnabled      Boolean  @default(false)
   paytabsProfileId    String?
   paytabsSecretKey    String?
-  paytabsRegion       String  @default("SAU")
-  paypalEnabled       Boolean @default(false)
+  paytabsRegion       String   @default("SAU")
+  paypalEnabled       Boolean  @default(false)
   paypalClientId      String?
   paypalSecret        String?
-  paypalMode          String  @default("sandbox")
-  stcpayEnabled       Boolean @default(false)
+  paypalMode          String   @default("sandbox")
+  stcpayEnabled       Boolean  @default(false)
   stcpayMerchantId    String?
   stcpayApiKey        String?
-  madaEnabled         Boolean @default(false)
-  hyperpayEnabled     Boolean @default(false)
+  madaEnabled         Boolean  @default(false)
+  hyperpayEnabled     Boolean  @default(false)
   hyperpayAccessToken String?
   hyperpayEntityId    String?
-  postpayEnabled      Boolean @default(false)
+  postpayEnabled      Boolean  @default(false)
   postpayApiUrl       String?
   postpayApiKey       String?
   // Multi-currency
   supportedCurrencies String[] @default(["BHD"])
   // Dark Mode
-  darkModeEnabled     Boolean @default(false)
+  darkModeEnabled     Boolean  @default(false)
   // ZATCA
-  zatcaEnabled        Boolean @default(false)
+  zatcaEnabled        Boolean  @default(false)
   zatcaVatNumber      String?
   zatcaCrNumber       String?
   // Homepage Page Builder
   homeBlocks          Json?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  store          Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("store_settings")
 }
@@ -258,19 +261,19 @@ model StoreSettings {
 // ABANDONED CARTS (السلل المتروكة)
 // ─────────────────────────────────────────────
 model AbandonedCart {
-  id           String    @id @default(cuid())
-  storeId      String
-  email        String
-  phone        String?
-  firstName    String?
-  cartData     Json
-  reminderSent Boolean   @default(false)
+  id             String    @id @default(cuid())
+  storeId        String
+  email          String
+  phone          String?
+  firstName      String?
+  cartData       Json
+  reminderSent   Boolean   @default(false)
   reminderSentAt DateTime?
-  recoveredAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  recoveredAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, email])
   @@map("abandoned_carts")
@@ -284,11 +287,11 @@ model PageView {
   storeId   String
   path      String
   referrer  String?
-  source    String?  // direct | google | social | email | other
+  source    String? // direct | google | social | email | other
   country   String?
   createdAt DateTime @default(now())
 
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId, createdAt])
   @@map("page_views")
@@ -298,7 +301,7 @@ model PageView {
 // CATEGORIES (التصنيفات)
 // ─────────────────────────────────────────────
 model Category {
-  id          String     @id @default(cuid())
+  id          String   @id @default(cuid())
   storeId     String
   parentId    String?
   name        String
@@ -306,15 +309,15 @@ model Category {
   slug        String
   description String?
   image       String?
-  sortOrder   Int        @default(0)
-  isActive    Boolean    @default(true)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  store       Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  parent      Category?  @relation("CategoryChildren", fields: [parentId], references: [id])
-  children    Category[] @relation("CategoryChildren")
-  products    Product[]
+  store    Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  parent   Category?  @relation("CategoryChildren", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryChildren")
+  products Product[]
 
   @@unique([storeId, slug])
   @@map("categories")
@@ -324,23 +327,23 @@ model Category {
 // PRODUCTS (المنتجات)
 // ─────────────────────────────────────────────
 model Product {
-  id              String        @id @default(cuid())
-  storeId         String
-  categoryId      String?
-  name            String
-  nameAr          String
-  slug            String
-  description     String?
-  descriptionAr   String?
-  sku             String?
-  barcode         String?
-  price           Decimal       @db.Decimal(10, 3)
-  comparePrice    Decimal?      @db.Decimal(10, 3)
-  costPrice       Decimal?      @db.Decimal(10, 3)
-  trackInventory  Boolean       @default(true)
-  stock           Int           @default(0)
-  lowStockAlert   Int           @default(5)
-  weight          Decimal?      @db.Decimal(8, 3)
+  id                   String   @id @default(cuid())
+  storeId              String
+  categoryId           String?
+  name                 String
+  nameAr               String
+  slug                 String
+  description          String?
+  descriptionAr        String?
+  sku                  String?
+  barcode              String?
+  price                Decimal  @db.Decimal(10, 3)
+  comparePrice         Decimal? @db.Decimal(10, 3)
+  costPrice            Decimal? @db.Decimal(10, 3)
+  trackInventory       Boolean  @default(true)
+  stock                Int      @default(0)
+  lowStockAlert        Int      @default(5)
+  weight               Decimal? @db.Decimal(8, 3)
   isActive             Boolean  @default(true)
   isFeatured           Boolean  @default(false)
   isDigital            Boolean  @default(false)
@@ -354,19 +357,19 @@ model Product {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  store           Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  category        Category?     @relation(fields: [categoryId], references: [id])
-  images          ProductImage[]
-  options         ProductOption[]
-  variants        ProductVariant[]
-  orderItems      OrderItem[]
-  reviews         Review[]
-  flashSaleItems  FlashSaleItem[]
-  backInStockSubs BackInStockSubscription[]
-  subscriptionPlans SubscriptionPlan[]
+  store              Store                     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  category           Category?                 @relation(fields: [categoryId], references: [id])
+  images             ProductImage[]
+  options            ProductOption[]
+  variants           ProductVariant[]
+  orderItems         OrderItem[]
+  reviews            Review[]
+  flashSaleItems     FlashSaleItem[]
+  backInStockSubs    BackInStockSubscription[]
+  subscriptionPlans  SubscriptionPlan[]
   liveStreamProducts LiveStreamProduct[]
-  productViews    ProductView[]
-  warehouseStocks WarehouseStock[]
+  productViews       ProductView[]
+  warehouseStocks    WarehouseStock[]
 
   @@unique([storeId, slug])
   @@map("products")
@@ -379,31 +382,31 @@ model ProductImage {
   alt       String?
   sortOrder Int     @default(0)
 
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@map("product_images")
 }
 
 model ProductOption {
-  id        String         @id @default(cuid())
+  id        String @id @default(cuid())
   productId String
   name      String
   nameAr    String
-  sortOrder Int            @default(0)
+  sortOrder Int    @default(0)
 
-  product   Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
-  values    OptionValue[]
+  product Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  values  OptionValue[]
 
   @@map("product_options")
 }
 
 model OptionValue {
-  id        String               @id @default(cuid())
+  id        String  @id @default(cuid())
   optionId  String
   value     String
   valueAr   String
   color     String?
-  sortOrder Int                  @default(0)
+  sortOrder Int     @default(0)
 
   option        ProductOption        @relation(fields: [optionId], references: [id], onDelete: Cascade)
   variantValues VariantOptionValue[]
@@ -449,25 +452,25 @@ model ProductVariant {
 // CUSTOMERS (العملاء)
 // ─────────────────────────────────────────────
 model Customer {
-  id           String    @id @default(cuid())
-  storeId      String
-  email        String?
-  phone        String
-  firstName    String
-  lastName     String
-  passwordHash String?
-  isGuest      Boolean   @default(false)
-  totalOrders  Int       @default(0)
-  totalSpent   Decimal   @default(0) @db.Decimal(10, 3)
+  id            String   @id @default(cuid())
+  storeId       String
+  email         String?
+  phone         String
+  firstName     String
+  lastName      String
+  passwordHash  String?
+  isGuest       Boolean  @default(false)
+  totalOrders   Int      @default(0)
+  totalSpent    Decimal  @default(0) @db.Decimal(10, 3)
   loyaltyPoints Int      @default(0)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  orders       Order[]
-  addresses    Address[]
-  loyaltyTx    LoyaltyTransaction[]
-  reviews      Review[]
+  store         Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orders        Order[]
+  addresses     Address[]
+  loyaltyTx     LoyaltyTransaction[]
+  reviews       Review[]
   referralCodes ReferralCode[]
   subscriptions CustomerSubscription[]
 
@@ -492,8 +495,8 @@ model Address {
   isDefault  Boolean  @default(false)
   createdAt  DateTime @default(now())
 
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  orders     Order[]
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders   Order[]
 
   @@map("addresses")
 }
@@ -502,54 +505,54 @@ model Address {
 // ORDERS (الطلبات)
 // ─────────────────────────────────────────────
 model Order {
-  id              String        @id @default(cuid())
-  storeId         String
-  customerId      String
-  addressId       String?
-  orderNumber     String
-  status          OrderStatus   @default(PENDING)
-  paymentStatus   PaymentStatus @default(PENDING)
-  paymentMethod   PaymentMethod
-  subtotal        Decimal       @db.Decimal(10, 3)
-  shippingCost    Decimal       @default(0) @db.Decimal(10, 3)
-  vatAmount       Decimal       @default(0) @db.Decimal(10, 3)
-  discountAmount  Decimal       @default(0) @db.Decimal(10, 3)
-  total           Decimal       @db.Decimal(10, 3)
-  couponCode      String?
-  notes           String?
-  trackingNumber  String?
-  shippingCompany String?
+  id               String        @id @default(cuid())
+  storeId          String
+  customerId       String
+  addressId        String?
+  orderNumber      String
+  status           OrderStatus   @default(PENDING)
+  paymentStatus    PaymentStatus @default(PENDING)
+  paymentMethod    PaymentMethod
+  subtotal         Decimal       @db.Decimal(10, 3)
+  shippingCost     Decimal       @default(0) @db.Decimal(10, 3)
+  vatAmount        Decimal       @default(0) @db.Decimal(10, 3)
+  discountAmount   Decimal       @default(0) @db.Decimal(10, 3)
+  total            Decimal       @db.Decimal(10, 3)
+  couponCode       String?
+  notes            String?
+  trackingNumber   String?
+  shippingCompany  String?
   paymentReference String? // external payment gateway reference/session ID
-  paidAt          DateTime?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  paidAt           DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
-  store           Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  customer        Customer      @relation(fields: [customerId], references: [id])
-  address         Address?      @relation(fields: [addressId], references: [id])
-  items           OrderItem[]
-  payment         Payment?
-  returns         OrderReturn[]
+  store    Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer      @relation(fields: [customerId], references: [id])
+  address  Address?      @relation(fields: [addressId], references: [id])
+  items    OrderItem[]
+  payment  Payment?
+  returns  OrderReturn[]
 
   @@unique([storeId, orderNumber])
   @@map("orders")
 }
 
 model OrderItem {
-  id        String          @id @default(cuid())
+  id        String  @id @default(cuid())
   orderId   String
   productId String
   variantId String?
   name      String
   nameAr    String
   sku       String?
-  price     Decimal         @db.Decimal(10, 3)
+  price     Decimal @db.Decimal(10, 3)
   quantity  Int
-  total     Decimal         @db.Decimal(10, 3)
+  total     Decimal @db.Decimal(10, 3)
 
-  order     Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product   Product         @relation(fields: [productId], references: [id])
-  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+  order   Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product         @relation(fields: [productId], references: [id])
+  variant ProductVariant? @relation(fields: [variantId], references: [id])
 
   @@map("order_items")
 }
@@ -558,27 +561,27 @@ model OrderItem {
 // RETURNS (المرتجعات)
 // ─────────────────────────────────────────────
 model OrderReturn {
-  id             String       @id @default(cuid())
-  orderId        String
-  returnNumber   String
-  reason         String
-  status         ReturnStatus @default(PENDING)
-  refundAmount   Decimal      @default(0) @db.Decimal(10, 3)
-  refundMethod   String?      // original_payment | store_credit | bank_transfer
-  notes          String?
-  processedAt    DateTime?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id           String       @id @default(cuid())
+  orderId      String
+  returnNumber String
+  reason       String
+  status       ReturnStatus @default(PENDING)
+  refundAmount Decimal      @default(0) @db.Decimal(10, 3)
+  refundMethod String? // original_payment | store_credit | bank_transfer
+  notes        String?
+  processedAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
-  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  items          ReturnItem[]
+  order Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items ReturnItem[]
 
   @@unique([orderId, returnNumber])
   @@map("order_returns")
 }
 
 model ReturnItem {
-  id          String      @id @default(cuid())
+  id          String  @id @default(cuid())
   returnId    String
   orderItemId String
   quantity    Int
@@ -600,19 +603,19 @@ enum ReturnStatus {
 // PAYMENTS (المدفوعات)
 // ─────────────────────────────────────────────
 model Payment {
-  id            String        @id @default(cuid())
-  orderId       String        @unique
-  method        PaymentMethod
-  amount        Decimal       @db.Decimal(10, 3)
-  currency      String        @default("BHD")
-  status        PaymentStatus @default(PENDING)
-  gatewayRef    String?
+  id              String        @id @default(cuid())
+  orderId         String        @unique
+  method          PaymentMethod
+  amount          Decimal       @db.Decimal(10, 3)
+  currency        String        @default("BHD")
+  status          PaymentStatus @default(PENDING)
+  gatewayRef      String?
   gatewayResponse Json?
-  paidAt        DateTime?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  order         Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@map("payments")
 }
@@ -621,20 +624,20 @@ model Payment {
 // COUPONS (الكوبونات)
 // ─────────────────────────────────────────────
 model Coupon {
-  id            String      @id @default(cuid())
+  id            String     @id @default(cuid())
   storeId       String
   code          String
   type          CouponType
-  value         Decimal     @db.Decimal(10, 3)
-  minOrderValue Decimal?    @db.Decimal(10, 3)
+  value         Decimal    @db.Decimal(10, 3)
+  minOrderValue Decimal?   @db.Decimal(10, 3)
   maxUses       Int?
-  usedCount     Int         @default(0)
-  isActive      Boolean     @default(true)
+  usedCount     Int        @default(0)
+  isActive      Boolean    @default(true)
   expiresAt     DateTime?
-  createdAt     DateTime    @default(now())
+  createdAt     DateTime   @default(now())
 
-  store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  rules         CouponRule[]
+  store Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  rules CouponRule[]
 
   @@unique([storeId, code])
   @@map("coupons")
@@ -644,22 +647,22 @@ model Coupon {
 // PAGES (صفحات المتجر)
 // ─────────────────────────────────────────────
 model Page {
-  id          String    @id @default(cuid())
-  storeId     String
-  title       String
-  titleAr     String
-  slug        String
-  content     String?
-  contentAr   String?
-  excerpt     String?
-  pageType    PageType  @default(CUSTOM)
-  isActive    Boolean   @default(true)
-  seoTitle    String?
-  seoDesc     String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  storeId   String
+  title     String
+  titleAr   String
+  slug      String
+  content   String?
+  contentAr String?
+  excerpt   String?
+  pageType  PageType @default(CUSTOM)
+  isActive  Boolean  @default(true)
+  seoTitle  String?
+  seoDesc   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, slug])
   @@map("pages")
@@ -684,8 +687,8 @@ model StoreStaff {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  store         Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  merchant      Merchant? @relation(fields: [merchantId], references: [id])
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  merchant Merchant? @relation(fields: [merchantId], references: [id])
 
   @@unique([storeId, email])
   @@map("store_staff")
@@ -695,17 +698,17 @@ model StoreStaff {
 // LOYALTY (نقاط الولاء)
 // ─────────────────────────────────────────────
 model LoyaltyTransaction {
-  id          String          @id @default(cuid())
+  id          String        @id @default(cuid())
   storeId     String
   customerId  String
   orderId     String?
   type        LoyaltyTxType
   points      Int
   description String?
-  createdAt   DateTime        @default(now())
+  createdAt   DateTime      @default(now())
 
-  store       Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  customer    Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@index([storeId, customerId])
   @@map("loyalty_transactions")
@@ -731,7 +734,7 @@ model BillingInvoice {
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
-  store         Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
   @@map("billing_invoices")
@@ -773,41 +776,41 @@ model PlanConfig {
 // APP STORE (متجر التطبيقات)
 // ─────────────────────────────────────────────
 model App {
-  id            String          @id @default(cuid())
-  slug          String          @unique
-  name          String
-  nameAr        String
-  description   String
-  descriptionAr String
-  icon          String?
-  category      AppCategory
-  developer     String
+  id             String         @id @default(cuid())
+  slug           String         @unique
+  name           String
+  nameAr         String
+  description    String
+  descriptionAr  String
+  icon           String?
+  category       AppCategory
+  developer      String
   developerEmail String?
-  webhookUrl    String?
-  isOfficial    Boolean         @default(false)
-  isApproved    Boolean         @default(false)
-  pricingType   AppPricingType  @default(FREE)
-  monthlyPrice  Decimal?        @db.Decimal(10, 3)
-  isActive      Boolean         @default(true)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  webhookUrl     String?
+  isOfficial     Boolean        @default(false)
+  isApproved     Boolean        @default(false)
+  pricingType    AppPricingType @default(FREE)
+  monthlyPrice   Decimal?       @db.Decimal(10, 3)
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
-  installs      InstalledApp[]
+  installs InstalledApp[]
 
   @@map("apps")
 }
 
 model InstalledApp {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   storeId     String
   appId       String
-  isActive    Boolean   @default(true)
+  isActive    Boolean  @default(true)
   config      Json?
-  installedAt DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  installedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  app         App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  app   App   @relation(fields: [appId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, appId])
   @@map("installed_apps")
@@ -836,7 +839,7 @@ model BlogPost {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, slug])
   @@map("blog_posts")
@@ -846,24 +849,24 @@ model BlogPost {
 // REVIEWS (تقييمات المنتجات)
 // ─────────────────────────────────────────────
 model Review {
-  id          String       @id @default(cuid())
-  storeId     String
-  productId   String
-  customerId  String?
-  name        String
-  email       String?
-  rating      Int
-  title       String?
-  body        String?
-  photos      String[]
-  status      ReviewStatus @default(PENDING)
-  isVerified  Boolean      @default(false)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id         String       @id @default(cuid())
+  storeId    String
+  productId  String
+  customerId String?
+  name       String
+  email      String?
+  rating     Int
+  title      String?
+  body       String?
+  photos     String[]
+  status     ReviewStatus @default(PENDING)
+  isVerified Boolean      @default(false)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
 
-  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  product     Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
-  customer    Customer?    @relation(fields: [customerId], references: [id])
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product  Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id])
 
   @@index([storeId, productId])
   @@map("reviews")
@@ -873,31 +876,31 @@ model Review {
 // FLASH SALES (العروض المحدودة)
 // ─────────────────────────────────────────────
 model FlashSale {
-  id            String        @id @default(cuid())
+  id            String     @id @default(cuid())
   storeId       String
   name          String
   nameAr        String
   startsAt      DateTime
   endsAt        DateTime
-  discountType  CouponType    @default(PERCENTAGE)
-  discountValue Decimal       @db.Decimal(10, 3)
-  isActive      Boolean       @default(true)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  discountType  CouponType @default(PERCENTAGE)
+  discountValue Decimal    @db.Decimal(10, 3)
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
-  store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  items         FlashSaleItem[]
+  store Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  items FlashSaleItem[]
 
   @@map("flash_sales")
 }
 
 model FlashSaleItem {
-  id          String    @id @default(cuid())
+  id          String @id @default(cuid())
   flashSaleId String
   productId   String
 
-  flashSale   FlashSale @relation(fields: [flashSaleId], references: [id], onDelete: Cascade)
-  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  flashSale FlashSale @relation(fields: [flashSaleId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([flashSaleId, productId])
   @@map("flash_sale_items")
@@ -907,19 +910,19 @@ model FlashSaleItem {
 // WEBHOOKS (Webhooks الأحداث)
 // ─────────────────────────────────────────────
 model Webhook {
-  id        String         @id @default(cuid())
-  storeId   String
-  url       String
-  secret    String         // HMAC signing secret
-  events    WebhookEvent[]
-  isActive  Boolean        @default(true)
+  id           String         @id @default(cuid())
+  storeId      String
+  url          String
+  secret       String // HMAC signing secret
+  events       WebhookEvent[]
+  isActive     Boolean        @default(true)
   lastCalledAt DateTime?
-  failureCount Int         @default(0)
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  failureCount Int            @default(0)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
 
-  store     Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  logs      WebhookLog[]
+  store Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  logs  WebhookLog[]
 
   @@map("webhooks")
 }
@@ -934,7 +937,7 @@ model WebhookLog {
   success    Boolean  @default(false)
   createdAt  DateTime @default(now())
 
-  webhook    Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId, createdAt])
   @@map("webhook_logs")
@@ -944,32 +947,32 @@ model WebhookLog {
 // REFERRAL PROGRAM (برنامج الإحالة)
 // ─────────────────────────────────────────────
 model ReferralCode {
-  id           String    @id @default(cuid())
-  storeId      String
-  customerId   String
-  code         String
-  uses         Int       @default(0)
-  totalEarned  Decimal   @default(0) @db.Decimal(10, 3)
-  createdAt    DateTime  @default(now())
+  id          String   @id @default(cuid())
+  storeId     String
+  customerId  String
+  code        String
+  uses        Int      @default(0)
+  totalEarned Decimal  @default(0) @db.Decimal(10, 3)
+  createdAt   DateTime @default(now())
 
-  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  referrals    Referral[]
+  store     Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer  Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  referrals Referral[]
 
   @@unique([storeId, code])
   @@map("referral_codes")
 }
 
 model Referral {
-  id             String       @id @default(cuid())
+  id             String         @id @default(cuid())
   referralCodeId String
   referredEmail  String
   orderId        String?
-  rewardAmount   Decimal      @default(0) @db.Decimal(10, 3)
+  rewardAmount   Decimal        @default(0) @db.Decimal(10, 3)
   status         ReferralStatus @default(PENDING)
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime       @default(now())
 
-  referralCode   ReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Cascade)
+  referralCode ReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Cascade)
 
   @@map("referrals")
 }
@@ -978,18 +981,18 @@ model Referral {
 // BACK IN STOCK (إشعارات العودة للمخزون)
 // ─────────────────────────────────────────────
 model BackInStockSubscription {
-  id        String   @id @default(cuid())
-  storeId   String
-  productId String
-  variantId String?
-  email     String
-  phone     String?
-  notified  Boolean  @default(false)
+  id         String    @id @default(cuid())
+  storeId    String
+  productId  String
+  variantId  String?
+  email      String
+  phone      String?
+  notified   Boolean   @default(false)
   notifiedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, productId, email])
   @@map("back_in_stock_subscriptions")
@@ -999,21 +1002,21 @@ model BackInStockSubscription {
 // GIFT CARDS (كروت الهدية)
 // ─────────────────────────────────────────────
 model GiftCard {
-  id           String         @id @default(cuid())
-  storeId      String
-  code         String
-  initialValue Decimal        @db.Decimal(10, 3)
-  balance      Decimal        @db.Decimal(10, 3)
-  isActive     Boolean        @default(true)
-  expiresAt    DateTime?
-  purchasedBy  String?        // customerId
+  id             String    @id @default(cuid())
+  storeId        String
+  code           String
+  initialValue   Decimal   @db.Decimal(10, 3)
+  balance        Decimal   @db.Decimal(10, 3)
+  isActive       Boolean   @default(true)
+  expiresAt      DateTime?
+  purchasedBy    String? // customerId
   recipientEmail String?
   recipientName  String?
-  message      String?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  message        String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  store        Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store        Store                 @relation(fields: [storeId], references: [id], onDelete: Cascade)
   transactions GiftCardTransaction[]
 
   @@unique([storeId, code])
@@ -1025,11 +1028,11 @@ model GiftCardTransaction {
   giftCardId String
   orderId    String?
   amount     Decimal  @db.Decimal(10, 3)
-  type       String   // PURCHASE | USAGE | REFUND
+  type       String // PURCHASE | USAGE | REFUND
   note       String?
   createdAt  DateTime @default(now())
 
-  giftCard   GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
+  giftCard GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
 
   @@map("gift_card_transactions")
 }
@@ -1038,36 +1041,36 @@ model GiftCardTransaction {
 // SUPPORT TICKETS (تذاكر الدعم)
 // ─────────────────────────────────────────────
 model SupportTicket {
-  id          String         @id @default(cuid())
-  storeId     String
-  merchantId  String
-  subject     String
-  status      TicketStatus   @default(OPEN)
-  priority    TicketPriority @default(MEDIUM)
-  category    String?
-  assignedTo      String?
-  assignedToName  String?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  resolvedAt  DateTime?
+  id             String         @id @default(cuid())
+  storeId        String
+  merchantId     String
+  subject        String
+  status         TicketStatus   @default(OPEN)
+  priority       TicketPriority @default(MEDIUM)
+  category       String?
+  assignedTo     String?
+  assignedToName String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  resolvedAt     DateTime?
 
-  store       Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  messages    TicketMessage[]
+  store    Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  messages TicketMessage[]
 
   @@index([storeId, status])
   @@map("support_tickets")
 }
 
 model TicketMessage {
-  id         String         @id @default(cuid())
-  ticketId   String
-  senderType String         // MERCHANT | ADMIN
-  senderId   String
-  body       String
+  id          String   @id @default(cuid())
+  ticketId    String
+  senderType  String // MERCHANT | ADMIN
+  senderId    String
+  body        String
   attachments String[]
-  createdAt  DateTime       @default(now())
+  createdAt   DateTime @default(now())
 
-  ticket     SupportTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   @@map("ticket_messages")
 }
@@ -1076,19 +1079,19 @@ model TicketMessage {
 // ONBOARDING (إعداد المتجر)
 // ─────────────────────────────────────────────
 model Onboarding {
-  id            String   @id @default(cuid())
-  storeId       String   @unique
-  step1Done     Boolean  @default(false) // Store info
-  step2Done     Boolean  @default(false) // Add first product
-  step3Done     Boolean  @default(false) // Upload logo/brand
-  step4Done     Boolean  @default(false) // Configure payment
-  step5Done     Boolean  @default(false) // Configure shipping
-  completedAt   DateTime?
-  skippedAt     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id          String    @id @default(cuid())
+  storeId     String    @unique
+  step1Done   Boolean   @default(false) // Store info
+  step2Done   Boolean   @default(false) // Add first product
+  step3Done   Boolean   @default(false) // Upload logo/brand
+  step4Done   Boolean   @default(false) // Configure payment
+  step5Done   Boolean   @default(false) // Configure shipping
+  completedAt DateTime?
+  skippedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("onboardings")
 }
@@ -1097,28 +1100,29 @@ model Onboarding {
 // STOREFRONT POPUPS (النوافذ المنبثقة)
 // ─────────────────────────────────────────────
 model Popup {
-  id          String    @id @default(cuid())
-  storeId     String
-  name        String
-  titleAr     String?
-  title       String?
-  bodyAr      String?
-  body        String?
-  buttonText  String?
-  buttonUrl   String?
-  trigger     PopupTrigger @default(ON_EXIT)
-  delaySeconds Int       @default(5)
-  couponCode  String?
-  imageUrl    String?
-  isActive    Boolean   @default(true)
-  showOnce    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id           String       @id @default(cuid())
+  storeId      String
+  name         String
+  titleAr      String?
+  title        String?
+  bodyAr       String?
+  body         String?
+  buttonText   String?
+  buttonUrl    String?
+  trigger      PopupTrigger @default(ON_EXIT)
+  delaySeconds Int          @default(5)
+  couponCode   String?
+  imageUrl     String?
+  isActive     Boolean      @default(true)
+  showOnce     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("popups")
 }
+
 enum AppCategory {
   MARKETING
   SHIPPING
@@ -1136,6 +1140,7 @@ enum AppPricingType {
   PAID
   FREEMIUM
 }
+
 enum BillingInvoiceStatus {
   PENDING
   PAID
@@ -1150,6 +1155,7 @@ enum LoyaltyTxType {
   EXPIRED
   ADJUSTED
 }
+
 enum StoreLanguage {
   AR
   EN
@@ -1294,24 +1300,24 @@ model EmailCampaign {
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
-  store          Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("email_campaigns")
 }
 
 model EmailSubscriber {
-  id              String    @id @default(cuid())
-  storeId         String
-  email           String
-  firstName       String?
-  lastName        String?
-  tags            String[]
-  isActive        Boolean   @default(true)
-  source          String    @default("STOREFRONT")
-  subscribedAt    DateTime  @default(now())
-  unsubscribedAt  DateTime?
+  id             String    @id @default(cuid())
+  storeId        String
+  email          String
+  firstName      String?
+  lastName       String?
+  tags           String[]
+  isActive       Boolean   @default(true)
+  source         String    @default("STOREFRONT")
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
 
-  store           Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, email])
   @@map("email_subscribers")
@@ -1337,7 +1343,7 @@ model Announcement {
   type       AnnouncementType @default(INFO)
   isActive   Boolean          @default(true)
   isPinned   Boolean          @default(false)
-  targetPlan String?          // null = all plans, otherwise plan name e.g. STARTER
+  targetPlan String? // null = all plans, otherwise plan name e.g. STARTER
   viewCount  Int              @default(0)
   startsAt   DateTime?
   endsAt     DateTime?
@@ -1393,7 +1399,7 @@ model UpsellRule {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("upsell_rules")
 }
@@ -1402,20 +1408,20 @@ model UpsellRule {
 // COUNTDOWN TIMERS (العدادات التنازلية)
 // ─────────────────────────────────────────────
 model CountdownTimer {
-  id          String   @id @default(cuid())
-  storeId     String
-  name        String
-  title       String?
-  titleAr     String?
-  endsAt      DateTime
-  isActive    Boolean  @default(true)
-  showOnAllPages Boolean @default(false)
-  targetUrl   String?
-  style       String   @default("BAR") // BAR | POPUP | INLINE
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  storeId        String
+  name           String
+  title          String?
+  titleAr        String?
+  endsAt         DateTime
+  isActive       Boolean  @default(true)
+  showOnAllPages Boolean  @default(false)
+  targetUrl      String?
+  style          String   @default("BAR") // BAR | POPUP | INLINE
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("countdown_timers")
 }
@@ -1424,21 +1430,21 @@ model CountdownTimer {
 // DOMAIN MANAGEMENT (إدارة الدومينات)
 // ─────────────────────────────────────────────
 model DomainVerification {
-  id            String       @id @default(cuid())
-  storeId       String       @unique
-  domain        String
-  verifyToken   String       @unique
-  verifyType    String       @default("TXT") // TXT | CNAME
-  sslStatus     SslStatus    @default(PENDING)
-  sslIssuedAt   DateTime?
-  sslExpiresAt  DateTime?
-  isVerified    Boolean      @default(false)
-  verifiedAt    DateTime?
-  cdnEnabled    Boolean      @default(false)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id           String    @id @default(cuid())
+  storeId      String    @unique
+  domain       String
+  verifyToken  String    @unique
+  verifyType   String    @default("TXT") // TXT | CNAME
+  sslStatus    SslStatus @default(PENDING)
+  sslIssuedAt  DateTime?
+  sslExpiresAt DateTime?
+  isVerified   Boolean   @default(false)
+  verifiedAt   DateTime?
+  cdnEnabled   Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  store         Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("domain_verifications")
 }
@@ -1455,42 +1461,42 @@ enum SslStatus {
 // SUBSCRIPTION PRODUCTS (منتجات الاشتراك)
 // ─────────────────────────────────────────────
 model SubscriptionPlan {
-  id            String              @id @default(cuid())
+  id            String               @id @default(cuid())
   productId     String
   name          String
   nameAr        String
   intervalType  SubscriptionInterval @default(MONTHLY)
-  intervalCount Int                 @default(1)
-  price         Decimal             @db.Decimal(10, 3)
-  trialDays     Int                 @default(0)
-  isActive      Boolean             @default(true)
-  createdAt     DateTime            @default(now())
+  intervalCount Int                  @default(1)
+  price         Decimal              @db.Decimal(10, 3)
+  trialDays     Int                  @default(0)
+  isActive      Boolean              @default(true)
+  createdAt     DateTime             @default(now())
 
-  product       Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product       Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
   subscriptions CustomerSubscription[]
 
   @@map("subscription_plans")
 }
 
 model CustomerSubscription {
-  id            String               @id @default(cuid())
-  storeId       String
-  customerId    String
-  planId        String
-  status        SubscriptionStatus   @default(ACTIVE)
+  id                 String             @id @default(cuid())
+  storeId            String
+  customerId         String
+  planId             String
+  status             SubscriptionStatus @default(ACTIVE)
   currentPeriodStart DateTime
   currentPeriodEnd   DateTime
-  cancelAtPeriodEnd  Boolean         @default(false)
-  cancelledAt   DateTime?
-  trialStartsAt DateTime?
-  trialEndsAt   DateTime?
-  gatewaySubId  String?
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  cancelAtPeriodEnd  Boolean            @default(false)
+  cancelledAt        DateTime?
+  trialStartsAt      DateTime?
+  trialEndsAt        DateTime?
+  gatewaySubId       String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
-  store         Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  customer      Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  plan          SubscriptionPlan     @relation(fields: [planId], references: [id])
+  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  plan     SubscriptionPlan @relation(fields: [planId], references: [id])
 
   @@index([storeId, customerId])
   @@map("customer_subscriptions")
@@ -1528,7 +1534,7 @@ model SmsCampaign {
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
-  store          Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("sms_campaigns")
 }
@@ -1545,35 +1551,35 @@ enum SmsCampaignStatus {
 // PUSH NOTIFICATIONS (الإشعارات الفورية)
 // ─────────────────────────────────────────────
 model PushSubscription {
-  id          String   @id @default(cuid())
-  storeId     String
-  endpoint    String
-  p256dh      String
-  auth        String
-  customerId  String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  storeId    String
+  endpoint   String
+  p256dh     String
+  auth       String
+  customerId String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
 
-  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, endpoint])
   @@map("push_subscriptions")
 }
 
 model PushNotificationCampaign {
-  id             String   @id @default(cuid())
-  storeId        String
-  title          String
-  body           String
-  imageUrl       String?
-  targetUrl      String?
-  sentCount      Int      @default(0)
-  clickCount     Int      @default(0)
-  isActive       Boolean  @default(true)
-  sentAt         DateTime?
-  createdAt      DateTime @default(now())
+  id         String    @id @default(cuid())
+  storeId    String
+  title      String
+  body       String
+  imageUrl   String?
+  targetUrl  String?
+  sentCount  Int       @default(0)
+  clickCount Int       @default(0)
+  isActive   Boolean   @default(true)
+  sentAt     DateTime?
+  createdAt  DateTime  @default(now())
 
-  store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("push_notification_campaigns")
 }
@@ -1582,20 +1588,20 @@ model PushNotificationCampaign {
 // ADVANCED COUPONS (كوبونات متقدمة)
 // ─────────────────────────────────────────────
 model CouponRule {
-  id              String     @id @default(cuid())
-  couponId        String
-  ruleType        String     // BOGO | TIERED | PRODUCT_SPECIFIC | CATEGORY_SPECIFIC
-  buyQuantity     Int?       // BOGO: buy X
-  getQuantity     Int?       // BOGO: get Y free
-  getProductId    String?    // BOGO: which product is free
-  tierMinValue    Decimal?   @db.Decimal(10, 3) // Tiered: min order for this tier
-  tierDiscount    Decimal?   @db.Decimal(10, 3) // Tiered: discount amount
-  tierType        String?    // Tiered: PERCENTAGE | FIXED
-  productIds      String[]   // Specific products
-  categoryIds     String[]   // Specific categories
-  createdAt       DateTime   @default(now())
+  id           String   @id @default(cuid())
+  couponId     String
+  ruleType     String // BOGO | TIERED | PRODUCT_SPECIFIC | CATEGORY_SPECIFIC
+  buyQuantity  Int? // BOGO: buy X
+  getQuantity  Int? // BOGO: get Y free
+  getProductId String? // BOGO: which product is free
+  tierMinValue Decimal? @db.Decimal(10, 3) // Tiered: min order for this tier
+  tierDiscount Decimal? @db.Decimal(10, 3) // Tiered: discount amount
+  tierType     String? // Tiered: PERCENTAGE | FIXED
+  productIds   String[] // Specific products
+  categoryIds  String[] // Specific categories
+  createdAt    DateTime @default(now())
 
-  coupon          Coupon     @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
 
   @@map("coupon_rules")
 }
@@ -1604,41 +1610,41 @@ model CouponRule {
 // POS — نقطة البيع
 // ─────────────────────────────────────────────
 model PosSession {
-  id          String      @id @default(cuid())
+  id          String    @id @default(cuid())
   storeId     String
   staffId     String
-  status      PosStatus   @default(OPEN)
-  openingCash Decimal     @default(0) @db.Decimal(10, 3)
-  closingCash Decimal?    @db.Decimal(10, 3)
-  totalSales  Decimal     @default(0) @db.Decimal(10, 3)
-  openedAt    DateTime    @default(now())
+  status      PosStatus @default(OPEN)
+  openingCash Decimal   @default(0) @db.Decimal(10, 3)
+  closingCash Decimal?  @db.Decimal(10, 3)
+  totalSales  Decimal   @default(0) @db.Decimal(10, 3)
+  openedAt    DateTime  @default(now())
   closedAt    DateTime?
 
-  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  orders      PosOrder[]
+  store  Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orders PosOrder[]
 
   @@map("pos_sessions")
 }
 
 model PosOrder {
-  id          String       @id @default(cuid())
-  sessionId   String
-  storeId     String
-  orderNumber String
-  items       Json         // [{productId, variantId, name, price, qty}]
-  subtotal    Decimal      @db.Decimal(10, 3)
-  vatAmount   Decimal      @default(0) @db.Decimal(10, 3)
-  discount    Decimal      @default(0) @db.Decimal(10, 3)
-  total       Decimal      @db.Decimal(10, 3)
-  payMethod   String       @default("CASH") // CASH | CARD | BENEFIT_PAY
-  paidAmount  Decimal      @default(0) @db.Decimal(10, 3)
-  change      Decimal      @default(0) @db.Decimal(10, 3)
-  customerId  String?
+  id           String   @id @default(cuid())
+  sessionId    String
+  storeId      String
+  orderNumber  String
+  items        Json // [{productId, variantId, name, price, qty}]
+  subtotal     Decimal  @db.Decimal(10, 3)
+  vatAmount    Decimal  @default(0) @db.Decimal(10, 3)
+  discount     Decimal  @default(0) @db.Decimal(10, 3)
+  total        Decimal  @db.Decimal(10, 3)
+  payMethod    String   @default("CASH") // CASH | CARD | BENEFIT_PAY
+  paidAmount   Decimal  @default(0) @db.Decimal(10, 3)
+  change       Decimal  @default(0) @db.Decimal(10, 3)
+  customerId   String?
   customerName String?
-  createdAt   DateTime     @default(now())
+  createdAt    DateTime @default(now())
 
-  session     PosSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  session PosSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  store   Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("pos_orders")
 }
@@ -1652,21 +1658,21 @@ enum PosStatus {
 // IMPORT JOBS (استيراد من منصات أخرى)
 // ─────────────────────────────────────────────
 model ImportJob {
-  id          String      @id @default(cuid())
+  id          String       @id @default(cuid())
   storeId     String
   source      ImportSource
   status      ImportStatus @default(PENDING)
-  totalItems  Int         @default(0)
-  imported    Int         @default(0)
-  failed      Int         @default(0)
+  totalItems  Int          @default(0)
+  imported    Int          @default(0)
+  failed      Int          @default(0)
   errorLog    String[]
   fileUrl     String?
   apiConfig   Json?
   startedAt   DateTime?
   completedAt DateTime?
-  createdAt   DateTime    @default(now())
+  createdAt   DateTime     @default(now())
 
-  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("import_jobs")
 }
@@ -1690,16 +1696,16 @@ enum ImportStatus {
 // PLATFORM HEALTH (صحة المنصة)
 // ─────────────────────────────────────────────
 model ErrorLog {
-  id          String   @id @default(cuid())
-  storeId     String?
-  level       String   @default("ERROR") // ERROR | WARN | INFO
-  message     String
-  stack       String?
-  path        String?
-  method      String?
-  userId      String?
-  metadata    Json?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  storeId   String?
+  level     String   @default("ERROR") // ERROR | WARN | INFO
+  message   String
+  stack     String?
+  path      String?
+  method    String?
+  userId    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
 
   @@index([createdAt])
   @@index([storeId])
@@ -1707,27 +1713,27 @@ model ErrorLog {
 }
 
 model SystemMetric {
-  id          String   @id @default(cuid())
-  metricName  String   // response_time | memory_usage | cpu | active_stores
-  value       Float
-  unit        String?
-  recordedAt  DateTime @default(now())
+  id         String   @id @default(cuid())
+  metricName String // response_time | memory_usage | cpu | active_stores
+  value      Float
+  unit       String?
+  recordedAt DateTime @default(now())
 
   @@index([metricName, recordedAt])
   @@map("system_metrics")
 }
 
 model SystemAlertConfig {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   name        String
   metricName  String
   threshold   Float
-  comparison  String   @default("GT") // GT | LT | EQ
-  channel     String   @default("EMAIL") // EMAIL | SLACK
-  destination String   // email address or slack webhook URL
-  isActive    Boolean  @default(true)
+  comparison  String    @default("GT") // GT | LT | EQ
+  channel     String    @default("EMAIL") // EMAIL | SLACK
+  destination String // email address or slack webhook URL
+  isActive    Boolean   @default(true)
   lastAlertAt DateTime?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   @@map("system_alert_configs")
 }
@@ -1736,45 +1742,47 @@ model SystemAlertConfig {
 // THEME STORE (متجر القوالب)
 // ─────────────────────────────────────────────
 model Theme {
-  id             String      @id @default(cuid())
-  slug           String      @unique
-  name           String
-  nameAr         String
-  description    String?
-  descriptionAr  String?
-  previewUrl     String?
-  thumbnailUrl   String?
-  demoUrl        String?
-  authorName     String
-  authorEmail    String?
-  price          Decimal     @default(0) @db.Decimal(10, 3)
-  isPremium      Boolean     @default(false)
-  isApproved     Boolean     @default(false)
-  isActive       Boolean     @default(true)
-  isFeatured     Boolean     @default(false)
-  downloadUrl    String?
-  tags           String[]
-  installCount   Int         @default(0)
-  rating         Decimal     @default(0) @db.Decimal(3, 2)
-  ratingCount    Int         @default(0)
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  name          String
+  nameAr        String
+  description   String?
+  descriptionAr String?
+  previewUrl    String?
+  thumbnailUrl  String?
+  demoUrl       String?
+  authorName    String
+  authorEmail   String?
+  price         Decimal  @default(0) @db.Decimal(10, 3)
+  isPremium     Boolean  @default(false)
+  isApproved    Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  isFeatured    Boolean  @default(false)
+  downloadUrl   String?
+  tags          String[]
+  installCount  Int      @default(0)
+  rating        Decimal  @default(0) @db.Decimal(3, 2)
+  ratingCount   Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  purchases      ThemePurchase[]
+  purchases    ThemePurchase[]
+  assets       ThemeAsset[]
+  storeConfigs StoreThemeConfig[]
 
   @@map("themes")
 }
 
 model ThemePurchase {
-  id        String   @id @default(cuid())
-  themeId   String
-  storeId   String
-  amount    Decimal  @db.Decimal(10, 3)
-  licenseKey String  @unique @default(cuid())
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  themeId    String
+  storeId    String
+  amount     Decimal  @db.Decimal(10, 3)
+  licenseKey String   @unique @default(cuid())
+  createdAt  DateTime @default(now())
 
-  theme     Theme    @relation(fields: [themeId], references: [id], onDelete: Cascade)
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  theme Theme @relation(fields: [themeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([themeId, storeId])
   @@map("theme_purchases")
@@ -1784,37 +1792,37 @@ model ThemePurchase {
 // PARTNER PROGRAM (برنامج الشركاء)
 // ─────────────────────────────────────────────
 model Partner {
-  id               String        @id @default(cuid())
-  companyName      String
-  contactName      String
-  email            String        @unique
-  phone            String?
-  website          String?
-  type             PartnerType   @default(AGENCY)
-  status           PartnerStatus @default(PENDING)
-  referralCode     String        @unique
-  commissionRate   Decimal       @default(0.20) @db.Decimal(5, 4) // 20%
-  totalEarned      Decimal       @default(0) @db.Decimal(10, 3)
-  totalPaid        Decimal       @default(0) @db.Decimal(10, 3)
-  certifiedBadge   Boolean       @default(false)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  id             String        @id @default(cuid())
+  companyName    String
+  contactName    String
+  email          String        @unique
+  phone          String?
+  website        String?
+  type           PartnerType   @default(AGENCY)
+  status         PartnerStatus @default(PENDING)
+  referralCode   String        @unique
+  commissionRate Decimal       @default(0.20) @db.Decimal(5, 4) // 20%
+  totalEarned    Decimal       @default(0) @db.Decimal(10, 3)
+  totalPaid      Decimal       @default(0) @db.Decimal(10, 3)
+  certifiedBadge Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
-  referrals        PartnerReferral[]
+  referrals PartnerReferral[]
 
   @@map("partners")
 }
 
 model PartnerReferral {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   partnerId  String
   storeId    String
-  commission Decimal  @default(0) @db.Decimal(10, 3)
-  status     String   @default("PENDING") // PENDING | PAID
+  commission Decimal   @default(0) @db.Decimal(10, 3)
+  status     String    @default("PENDING") // PENDING | PAID
   paidAt     DateTime?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
-  partner    Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
 
   @@map("partner_referrals")
 }
@@ -1836,7 +1844,7 @@ enum PartnerStatus {
 // LIVE COMMERCE (البث المباشر)
 // ─────────────────────────────────────────────
 model LiveStream {
-  id           String          @id @default(cuid())
+  id           String           @id @default(cuid())
   storeId      String
   title        String
   titleAr      String?
@@ -1845,20 +1853,20 @@ model LiveStream {
   scheduledAt  DateTime?
   startedAt    DateTime?
   endedAt      DateTime?
-  streamKey    String          @unique @default(cuid())
-  platform     String          @default("CUSTOM") // YOUTUBE | TIKTOK | INSTAGRAM | CUSTOM
-  embedUrl     String?         // iframe embed URL for the storefront player
+  streamKey    String           @unique @default(cuid())
+  platform     String           @default("CUSTOM") // YOUTUBE | TIKTOK | INSTAGRAM | CUSTOM
+  embedUrl     String? // iframe embed URL for the storefront player
   playbackUrl  String?
   thumbnailUrl String?
-  viewerCount  Int             @default(0)
-  peakViewers  Int             @default(0)
-  totalOrders  Int             @default(0)
-  revenue      Decimal         @default(0) @db.Decimal(10, 3)
+  viewerCount  Int              @default(0)
+  peakViewers  Int              @default(0)
+  totalOrders  Int              @default(0)
+  revenue      Decimal          @default(0) @db.Decimal(10, 3)
   recordingUrl String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
-  store        Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store        Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
   products     LiveStreamProduct[]
   chatMessages LiveChatMessage[]
 
@@ -1866,15 +1874,15 @@ model LiveStream {
 }
 
 model LiveStreamProduct {
-  id           String    @id @default(cuid())
-  streamId     String
-  productId    String
-  sortOrder    Int       @default(0)
-  addedAt      DateTime  @default(now())
-  soldCount    Int       @default(0)
+  id        String   @id @default(cuid())
+  streamId  String
+  productId String
+  sortOrder Int      @default(0)
+  addedAt   DateTime @default(now())
+  soldCount Int      @default(0)
 
-  stream       LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
-  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stream  LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  product Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([streamId, productId])
   @@map("live_stream_products")
@@ -1890,7 +1898,7 @@ model LiveChatMessage {
   isHidden   Boolean  @default(false)
   createdAt  DateTime @default(now())
 
-  stream     LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  stream LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
 
   @@index([streamId, createdAt])
   @@map("live_chat_messages")
@@ -1907,34 +1915,34 @@ enum LiveStreamStatus {
 // LIVE CHAT SUPPORT (دردشة مباشرة للدعم)
 // ─────────────────────────────────────────────
 model LiveChatSession {
-  id          String            @id @default(cuid())
-  storeId     String
-  visitorId   String
-  visitorName String?
+  id           String            @id @default(cuid())
+  storeId      String
+  visitorId    String
+  visitorName  String?
   visitorEmail String?
-  status      ChatSessionStatus @default(WAITING)
-  assignedTo  String?           // staffId
-  startedAt   DateTime          @default(now())
-  endedAt     DateTime?
-  rating      Int?
+  status       ChatSessionStatus @default(WAITING)
+  assignedTo   String? // staffId
+  startedAt    DateTime          @default(now())
+  endedAt      DateTime?
+  rating       Int?
 
-  store       Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  messages    LiveChatSupportMessage[]
+  store    Store                    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  messages LiveChatSupportMessage[]
 
   @@map("live_chat_sessions")
 }
 
 model LiveChatSupportMessage {
-  id         String          @id @default(cuid())
+  id         String   @id @default(cuid())
   sessionId  String
-  senderType String          @default("VISITOR") // VISITOR | STAFF
+  senderType String   @default("VISITOR") // VISITOR | STAFF
   senderId   String?
   message    String
   fileUrl    String?
-  isRead     Boolean         @default(false)
-  createdAt  DateTime        @default(now())
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
 
-  session    LiveChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session LiveChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt])
   @@map("live_chat_support_messages")
@@ -1950,35 +1958,35 @@ enum ChatSessionStatus {
 // MULTI-LOCATION INVENTORY (مخزون متعدد المواقع)
 // ─────────────────────────────────────────────
 model Warehouse {
-  id          String    @id @default(cuid())
-  storeId     String
-  name        String
-  nameAr      String
-  address     String?
-  city        String?
-  country     String    @default("BH")
-  isDefault   Boolean   @default(false)
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  storeId   String
+  name      String
+  nameAr    String
+  address   String?
+  city      String?
+  country   String   @default("BH")
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  stocks      WarehouseStock[]
+  store  Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stocks WarehouseStock[]
 
   @@map("warehouses")
 }
 
 model WarehouseStock {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   warehouseId String
   productId   String
   variantId   String?
-  stock       Int       @default(0)
-  reserved    Int       @default(0)    // reserved for pending orders
-  updatedAt   DateTime  @updatedAt
+  stock       Int      @default(0)
+  reserved    Int      @default(0) // reserved for pending orders
+  updatedAt   DateTime @updatedAt
 
-  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([warehouseId, productId, variantId])
   @@map("warehouse_stocks")
@@ -1988,12 +1996,12 @@ model WarehouseStock {
 // CURRENCY RATES (أسعار العملات)
 // ─────────────────────────────────────────────
 model CurrencyRate {
-  id          String   @id @default(cuid())
-  baseCurrency String  @default("BHD")
+  id             String   @id @default(cuid())
+  baseCurrency   String   @default("BHD")
   targetCurrency String
-  rate        Decimal  @db.Decimal(12, 6)
-  source      String?  // openexchangerates / manual
-  updatedAt   DateTime @updatedAt
+  rate           Decimal  @db.Decimal(12, 6)
+  source         String? // openexchangerates / manual
+  updatedAt      DateTime @updatedAt
 
   @@unique([baseCurrency, targetCurrency])
   @@map("currency_rates")
@@ -2003,16 +2011,16 @@ model CurrencyRate {
 // PRODUCT VIEWS / AI (تتبع المشاهدات)
 // ─────────────────────────────────────────────
 model ProductView {
-  id          String   @id @default(cuid())
-  storeId     String
-  productId   String
-  customerId  String?
-  sessionId   String?
-  source      String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  storeId    String
+  productId  String
+  customerId String?
+  sessionId  String?
+  source     String?
+  createdAt  DateTime @default(now())
 
-  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([storeId, productId])
   @@index([storeId, customerId])
@@ -2023,31 +2031,31 @@ model ProductView {
 // ZATCA / B2B INVOICES (الفوترة الإلكترونية)
 // ─────────────────────────────────────────────
 model ZatcaInvoice {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   storeId       String
-  orderId       String   @unique
+  orderId       String    @unique
   invoiceNumber String
-  uuid          String   @unique @default(cuid())
-  invoiceType   String   @default("STANDARD") // STANDARD | CREDIT | DEBIT
+  uuid          String    @unique @default(cuid())
+  invoiceType   String    @default("STANDARD") // STANDARD | CREDIT | DEBIT
   sellerName    String
   sellerVat     String?
   buyerName     String?
   buyerVat      String?
-  totalAmount   Decimal  @db.Decimal(10, 2)
-  vatAmount     Decimal  @db.Decimal(10, 2)
+  totalAmount   Decimal   @db.Decimal(10, 2)
+  vatAmount     Decimal   @db.Decimal(10, 2)
   qrCode        String?
   xmlContent    String?
-  status        String   @default("PENDING") // PENDING | REPORTED | ERROR
+  status        String    @default("PENDING") // PENDING | REPORTED | ERROR
   reportedAt    DateTime?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
-  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("zatca_invoices")
 }
 
 model B2BInvoice {
-  id            String        @id @default(cuid())
+  id            String    @id @default(cuid())
   storeId       String
   orderId       String?
   invoiceNumber String
@@ -2056,18 +2064,18 @@ model B2BInvoice {
   buyerVat      String?
   buyerEmail    String?
   items         Json
-  subtotal      Decimal       @db.Decimal(10, 3)
-  vatAmount     Decimal       @default(0) @db.Decimal(10, 3)
-  total         Decimal       @db.Decimal(10, 3)
-  status        B2BStatus     @default(DRAFT)
+  subtotal      Decimal   @db.Decimal(10, 3)
+  vatAmount     Decimal   @default(0) @db.Decimal(10, 3)
+  total         Decimal   @db.Decimal(10, 3)
+  status        B2BStatus @default(DRAFT)
   dueDate       DateTime?
   paidAt        DateTime?
   notes         String?
   pdfUrl        String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, invoiceNumber])
   @@map("b2b_invoices")
@@ -2085,22 +2093,22 @@ enum B2BStatus {
 // SOCIAL INTEGRATIONS (TikTok Shop, Instagram)
 // ─────────────────────────────────────────────
 model SocialIntegration {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   storeId      String
-  platform     String   // TIKTOK_SHOP | INSTAGRAM | GOOGLE_SHOPPING
-  isConnected  Boolean  @default(false)
+  platform     String // TIKTOK_SHOP | INSTAGRAM | GOOGLE_SHOPPING
+  isConnected  Boolean   @default(false)
   accessToken  String?
   refreshToken String?
   expiresAt    DateTime?
   shopId       String?
   catalogId    String?
   lastSyncAt   DateTime?
-  syncedCount  Int      @default(0)
+  syncedCount  Int       @default(0)
   config       Json?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, platform])
   @@map("social_integrations")
@@ -2110,54 +2118,54 @@ model SocialIntegration {
 // SHIPPING RATES & PROVIDERS
 // ─────────────────────────────────────────────
 model ShippingZone {
-  id          String    @id @default(cuid())
-  storeId     String
-  name        String
-  nameAr      String
-  countries   String[]
-  cities      String[]
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  storeId   String
+  name      String
+  nameAr    String
+  countries String[]
+  cities    String[]
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  rates       ShippingRate[]
+  store Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  rates ShippingRate[]
 
   @@map("shipping_zones")
 }
 
 model ShippingRate {
-  id               String     @id @default(cuid())
-  zoneId           String
-  name             String
-  nameAr           String
-  provider         String     @default("MANUAL") // MANUAL | ARAMEX | DHL | SMSA | FETCHR
-  price            Decimal    @db.Decimal(10, 3)
-  minWeight        Decimal?   @db.Decimal(8, 3)
-  maxWeight        Decimal?   @db.Decimal(8, 3)
-  minOrderValue    Decimal?   @db.Decimal(10, 3)
-  isFree           Boolean    @default(false)
-  estimatedDays    Int        @default(3)
-  isActive         Boolean    @default(true)
-  createdAt        DateTime   @default(now())
+  id            String   @id @default(cuid())
+  zoneId        String
+  name          String
+  nameAr        String
+  provider      String   @default("MANUAL") // MANUAL | ARAMEX | DHL | SMSA | FETCHR
+  price         Decimal  @db.Decimal(10, 3)
+  minWeight     Decimal? @db.Decimal(8, 3)
+  maxWeight     Decimal? @db.Decimal(8, 3)
+  minOrderValue Decimal? @db.Decimal(10, 3)
+  isFree        Boolean  @default(false)
+  estimatedDays Int      @default(3)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
 
-  zone             ShippingZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  zone ShippingZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
 
   @@map("shipping_rates")
 }
 
 model ShipmentTracking {
-  id              String   @id @default(cuid())
-  orderId         String   @unique
-  trackingNumber  String
-  provider        String
-  status          String   @default("CREATED")
-  events          Json     @default("[]")
+  id                String    @id @default(cuid())
+  orderId           String    @unique
+  trackingNumber    String
+  provider          String
+  status            String    @default("CREATED")
+  events            Json      @default("[]")
   estimatedDelivery DateTime?
-  deliveredAt     DateTime?
-  lastCheckedAt   DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  deliveredAt       DateTime?
+  lastCheckedAt     DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@map("shipment_trackings")
 }
@@ -2166,17 +2174,17 @@ model ShipmentTracking {
 // GOOGLE SHOPPING FEED
 // ─────────────────────────────────────────────
 model ShoppingFeed {
-  id           String   @id @default(cuid())
-  storeId      String   @unique
-  platform     String   @default("GOOGLE") // GOOGLE | META
-  isEnabled    Boolean  @default(false)
+  id           String    @id @default(cuid())
+  storeId      String    @unique
+  platform     String    @default("GOOGLE") // GOOGLE | META
+  isEnabled    Boolean   @default(false)
   lastGenAt    DateTime?
   feedUrl      String?
-  productCount Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  productCount Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("shopping_feeds")
 }
@@ -2197,7 +2205,7 @@ model ShoppingFeed {
 model AiChat {
   id        String   @id @default(cuid())
   storeId   String
-  role      String   // 'merchant' | 'assistant'
+  role      String // 'merchant' | 'assistant'
   message   String   @db.Text
   metadata  Json?
   createdAt DateTime @default(now())
@@ -2210,24 +2218,24 @@ model AiChat {
 // BAZAR FINANCE (تمويل التاجر)
 // ─────────────────────────────────────────────
 model MerchantLoan {
-  id              String         @id @default(cuid())
+  id              String     @id @default(cuid())
   storeId         String
   merchantId      String
   requestedAmount Float
   approvedAmount  Float?
-  repaidAmount    Float          @default(0)
-  feeRate         Float          @default(0.10) // 10%
+  repaidAmount    Float      @default(0)
+  feeRate         Float      @default(0.10) // 10%
   feeAmount       Float?
-  repaymentRate   Float          @default(0.10) // 10% of each sale
-  status          LoanStatus     @default(PENDING)
+  repaymentRate   Float      @default(0.10) // 10% of each sale
+  status          LoanStatus @default(PENDING)
   approvedAt      DateTime?
   disbursedAt     DateTime?
   fullyRepaidAt   DateTime?
   notes           String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
-  repayments      LoanRepayment[]
+  repayments LoanRepayment[]
 
   @@index([storeId])
   @@index([merchantId])
@@ -2241,7 +2249,7 @@ model LoanRepayment {
   amount    Float
   createdAt DateTime @default(now())
 
-  loan      MerchantLoan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  loan MerchantLoan @relation(fields: [loanId], references: [id], onDelete: Cascade)
 
   @@index([loanId])
   @@map("loan_repayments")
@@ -2262,31 +2270,31 @@ enum LoanStatus {
 model RestaurantTable {
   id        String   @id @default(cuid())
   storeId   String
-  name      String   // "طاولة 1", "طاولة VIP"
-  qrCode    String?  // QR code URL or data
+  name      String // "طاولة 1", "طاولة VIP"
+  qrCode    String? // QR code URL or data
   capacity  Int      @default(4)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  orders    RestaurantOrder[]
+  orders RestaurantOrder[]
 
   @@index([storeId])
   @@map("restaurant_tables")
 }
 
 model RestaurantOrder {
-  id          String              @id @default(cuid())
-  storeId     String
-  tableId     String
-  orderId     String?             // links to main Order
-  guestCount  Int                 @default(1)
-  notes       String?
-  status      RestaurantOrderStatus @default(PENDING)
-  paidAt      DateTime?
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  id         String                @id @default(cuid())
+  storeId    String
+  tableId    String
+  orderId    String? // links to main Order
+  guestCount Int                   @default(1)
+  notes      String?
+  status     RestaurantOrderStatus @default(PENDING)
+  paidAt     DateTime?
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
 
-  table       RestaurantTable     @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  table RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
   @@index([storeId, status])
   @@map("restaurant_orders")
@@ -2306,29 +2314,29 @@ enum RestaurantOrderStatus {
 // MERCHANT BADGES (شارات التاجر)
 // ─────────────────────────────────────────────
 model MerchantBadge {
-  id          String   @id @default(cuid())
-  key         String   @unique  // 'trusted_seller', 'fast_shipper', etc.
-  nameAr      String
-  nameEn      String
+  id            String   @id @default(cuid())
+  key           String   @unique // 'trusted_seller', 'fast_shipper', etc.
+  nameAr        String
+  nameEn        String
   descriptionAr String
-  icon        String
-  color       String   @default("#6366f1")
-  criteria    Json     // { type: 'orders_count', threshold: 100 }
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  icon          String
+  color         String   @default("#6366f1")
+  criteria      Json // { type: 'orders_count', threshold: 100 }
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
 
-  earned      MerchantBadgeEarned[]
+  earned MerchantBadgeEarned[]
 
   @@map("merchant_badges")
 }
 
 model MerchantBadgeEarned {
-  id        String   @id @default(cuid())
-  storeId   String
-  badgeId   String
-  earnedAt  DateTime @default(now())
+  id       String   @id @default(cuid())
+  storeId  String
+  badgeId  String
+  earnedAt DateTime @default(now())
 
-  badge     MerchantBadge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  badge MerchantBadge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, badgeId])
   @@index([storeId])
@@ -2339,15 +2347,15 @@ model MerchantBadgeEarned {
 // SMART ALERTS (التنبيهات الذكية)
 // ─────────────────────────────────────────────
 model MerchantAlert {
-  id          String      @id @default(cuid())
-  storeId     String
-  type        AlertType
-  title       String
-  message     String      @db.Text
-  data        Json?
-  isRead      Boolean     @default(false)
-  priority    AlertPriority @default(MEDIUM)
-  createdAt   DateTime    @default(now())
+  id        String        @id @default(cuid())
+  storeId   String
+  type      AlertType
+  title     String
+  message   String        @db.Text
+  data      Json?
+  isRead    Boolean       @default(false)
+  priority  AlertPriority @default(MEDIUM)
+  createdAt DateTime      @default(now())
 
   @@index([storeId, isRead])
   @@index([storeId, createdAt])
@@ -2355,14 +2363,14 @@ model MerchantAlert {
 }
 
 model AlertConfig {
-  id             String   @id @default(cuid())
-  storeId        String   @unique
-  lowStockDays   Int      @default(7)    // alert when stock runs out in X days
-  abandonedCartMinutes Int @default(30)  // alert after Y minutes
-  inactiveCustomerDays  Int @default(60) // alert after Z days inactive
-  channels       Json     @default("{\"email\": true, \"push\": true, \"whatsapp\": false}")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  storeId              String   @unique
+  lowStockDays         Int      @default(7) // alert when stock runs out in X days
+  abandonedCartMinutes Int      @default(30) // alert after Y minutes
+  inactiveCustomerDays Int      @default(60) // alert after Z days inactive
+  channels             Json     @default("{\"email\": true, \"push\": true, \"whatsapp\": false}")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   @@map("alert_configs")
 }
@@ -2392,15 +2400,15 @@ enum AlertPriority {
 // WHATSAPP COMMERCE (تجارة واتساب)
 // ─────────────────────────────────────────────
 model WhatsappCommerceSession {
-  id          String   @id @default(cuid())
-  storeId     String
-  phone       String
-  customerName String?
-  state       String   @default("GREETING") // FSM state
-  cartItems   Json     @default("[]")
-  customerId  String?
+  id            String   @id @default(cuid())
+  storeId       String
+  phone         String
+  customerName  String?
+  state         String   @default("GREETING") // FSM state
+  cartItems     Json     @default("[]")
+  customerId    String?
   lastMessageAt DateTime @default(now())
-  createdAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
 
   @@unique([storeId, phone])
   @@index([storeId])
@@ -2408,15 +2416,15 @@ model WhatsappCommerceSession {
 }
 
 model WhatsappCommerceConfig {
-  id              String   @id @default(cuid())
-  storeId         String   @unique
-  phoneNumberId   String
-  accessToken     String
-  verifyToken     String
-  welcomeMessage  String?
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  storeId        String   @unique
+  phoneNumberId  String
+  accessToken    String
+  verifyToken    String
+  welcomeMessage String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@map("whatsapp_commerce_configs")
 }
@@ -2456,7 +2464,7 @@ model EmailTemplate {
   nameAr    String
   subject   String
   subjectAr String
-  body      String   // HTML template with {{var}} placeholders
+  body      String // HTML template with {{var}} placeholders
   bodyAr    String
   vars      String[] // available template variables e.g. ["{{merchant_name}}", "{{store_name}}"]
   createdAt DateTime @default(now())
@@ -2469,25 +2477,26 @@ model EmailTemplate {
 // PLATFORM STAFF ROLES (أدوار فريق المنصة)
 // ─────────────────────────────────────────────
 model PlatformRole {
-  id          String           @id @default(cuid())
-  name        String           @unique  // e.g. SUPPORT, FINANCE, CONTENT, ADMIN
-  nameAr      String
-  description String?
+  id                String   @id @default(cuid())
+  name              String   @unique // e.g. SUPPORT, FINANCE, CONTENT, ADMIN
+  nameAr            String
+  description       String?
   // Permissions
-  canViewMerchants    Boolean @default(false)
-  canDisableStore     Boolean @default(false)
-  canReplyTickets     Boolean @default(false)
-  canEditPlans        Boolean @default(false)
-  canManageApps       Boolean @default(false)
-  canViewFinancials   Boolean @default(false)
-  canViewAuditLog     Boolean @default(false)
-  canManageContent    Boolean @default(false)
-  canManageTeam       Boolean @default(false)
-  isSystem            Boolean @default(false) // built-in & not deletable
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  canViewMerchants  Boolean  @default(false)
+  canDisableStore   Boolean  @default(false)
+  canReplyTickets   Boolean  @default(false)
+  canEditPlans      Boolean  @default(false)
+  canManageApps     Boolean  @default(false)
+  canViewFinancials Boolean  @default(false)
+  canViewAuditLog   Boolean  @default(false)
+  canManageContent  Boolean  @default(false)
+  canReviewKYC      Boolean  @default(false)
+  canManageTeam     Boolean  @default(false)
+  isSystem          Boolean  @default(false) // built-in & not deletable
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  members     PlatformStaff[]
+  members PlatformStaff[]
 
   @@map("platform_roles")
 }
@@ -2496,20 +2505,20 @@ model PlatformRole {
 // PLATFORM STAFF (موظفو المنصة)
 // ─────────────────────────────────────────────
 model PlatformStaff {
-  id          String        @id @default(cuid())
-  email       String        @unique
+  id          String    @id @default(cuid())
+  email       String    @unique
   firstName   String
   lastName    String
   roleId      String
-  isActive    Boolean       @default(true)
-  inviteToken String?       @unique  // set until accepted
-  invitedAt   DateTime      @default(now())
+  isActive    Boolean   @default(true)
+  inviteToken String?   @unique // set until accepted
+  invitedAt   DateTime  @default(now())
   joinedAt    DateTime?
   lastLoginAt DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  role        PlatformRole  @relation(fields: [roleId], references: [id])
+  role PlatformRole @relation(fields: [roleId], references: [id])
 
   @@map("platform_staff")
 }
@@ -2519,15 +2528,15 @@ model PlatformStaff {
 // ─────────────────────────────────────────────
 model AuditLog {
   id         String   @id @default(cuid())
-  actorId    String   // merchantId (admin) or platformStaffId
-  actorType  String   // ADMIN | STAFF
+  actorId    String // merchantId (admin) or platformStaffId
+  actorType  String // ADMIN | STAFF
   actorName  String
   actorEmail String
-  action     String   // e.g. DISABLE_STORE, UPDATE_PLAN, DELETE_APP
-  entityType String?  // STORE | MERCHANT | APP | THEME | TICKET ...
+  action     String // e.g. DISABLE_STORE, UPDATE_PLAN, DELETE_APP
+  entityType String? // STORE | MERCHANT | APP | THEME | TICKET ...
   entityId   String?
   entityName String?
-  details    Json?    // extra context
+  details    Json? // extra context
   ip         String?
   userAgent  String?
   createdAt  DateTime @default(now())
@@ -2544,31 +2553,33 @@ model AuditLog {
 
 // كوبونات الاشتراك
 model SubscriptionCoupon {
-  id              String    @id @default(cuid())
-  code            String    @unique
-  description     String?
-  type            String    @default("PERCENTAGE") // PERCENTAGE | FIXED
-  value           Decimal   @db.Decimal(10, 3)     // % أو مبلغ ثابت
-  maxUses         Int?                              // null = غير محدود
-  usedCount       Int       @default(0)
-  applicablePlan  String?                           // null = كل الباقات
-  validFrom       DateTime?
-  validTo         DateTime?
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  usages          SubscriptionCouponUsage[]
+  id             String                    @id @default(cuid())
+  code           String                    @unique
+  description    String?
+  type           String                    @default("PERCENTAGE") // PERCENTAGE | FIXED
+  value          Decimal                   @db.Decimal(10, 3) // % أو مبلغ ثابت
+  maxUses        Int? // null = غير محدود
+  usedCount      Int                       @default(0)
+  applicablePlan String? // null = كل الباقات
+  validFrom      DateTime?
+  validTo        DateTime?
+  isActive       Boolean                   @default(true)
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+  usages         SubscriptionCouponUsage[]
+
   @@map("subscription_coupons")
 }
 
 model SubscriptionCouponUsage {
-  id        String   @id @default(cuid())
-  couponId  String
+  id         String             @id @default(cuid())
+  couponId   String
   merchantId String
-  storeId   String?
-  discount  Decimal  @db.Decimal(10, 3)
-  usedAt    DateTime @default(now())
-  coupon    SubscriptionCoupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  storeId    String?
+  discount   Decimal            @db.Decimal(10, 3)
+  usedAt     DateTime           @default(now())
+  coupon     SubscriptionCoupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
   @@map("subscription_coupon_usages")
 }
 
@@ -2585,6 +2596,7 @@ model MerchantReferral {
   rewardedAt         DateTime?
   createdAt          DateTime  @default(now())
   referrer           Merchant  @relation(fields: [referrerId], references: [id], onDelete: Cascade)
+
   @@index([referrerId])
   @@index([status])
   @@map("merchant_referrals")
@@ -2596,18 +2608,20 @@ model MerchantReferral {
 
 // KYC Documents (وثائق التحقق)
 model KycDocument {
-  id          String   @id @default(cuid())
-  merchantId  String
-  type        String   // NATIONAL_ID | COMMERCIAL_REGISTRATION | VAT_CERTIFICATE | OTHER
-  fileUrl     String
-  fileName    String?
-  status      String   @default("PENDING") // PENDING | APPROVED | REJECTED
-  reviewNote  String?
-  reviewedAt  DateTime?
-  reviewedBy  String?  // admin email
-  createdAt   DateTime @default(now())
+  id         String    @id @default(cuid())
+  merchantId String
+  type       String // NATIONAL_ID | COMMERCIAL_REGISTRATION | VAT_CERTIFICATE | OTHER
+  fileUrl    String
+  fileName   String?
+  status     String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewNote String?
+  reviewedAt DateTime?
+  reviewedBy String? // admin email
+  expiresAt  DateTime?
+  reVerifyBy DateTime?
+  createdAt  DateTime  @default(now())
 
-  merchant    Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 
   @@index([merchantId])
   @@index([status])
@@ -2617,10 +2631,10 @@ model KycDocument {
 // Blacklist (القوائم السوداء)
 model Blacklist {
   id        String   @id @default(cuid())
-  type      String   // IP | EMAIL | DOMAIN
+  type      String // IP | EMAIL | DOMAIN
   value     String
   reason    String?
-  createdBy String?  // admin email
+  createdBy String? // admin email
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
@@ -2636,21 +2650,21 @@ model LegalPage {
   title     String
   content   String
   updatedAt DateTime @updatedAt
-  updatedBy String?  // admin email
+  updatedBy String? // admin email
 
   @@map("legal_pages")
 }
 
 // Terms Acceptance Log (سجل قبول الشروط)
 model TermsAcceptance {
-  id          String   @id @default(cuid())
-  merchantId  String
-  version     String   @default("1.0")
-  acceptedAt  DateTime @default(now())
-  ipAddress   String?
-  userAgent   String?
+  id         String   @id @default(cuid())
+  merchantId String
+  version    String   @default("1.0")
+  acceptedAt DateTime @default(now())
+  ipAddress  String?
+  userAgent  String?
 
-  merchant    Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 
   @@index([merchantId])
   @@map("terms_acceptances")
@@ -2672,44 +2686,44 @@ model PlatformSetting {
 
 // Feature Flags (ميزات قابلة للتشغيل/الإيقاف)
 model FeatureFlag {
-  id            String   @id @default(cuid())
-  key           String   @unique  // e.g. "live_chat", "ai_copilot"
-  name          String
-  description   String?
-  isEnabled     Boolean  @default(false)
+  id              String   @id @default(cuid())
+  key             String   @unique // e.g. "live_chat", "ai_copilot"
+  name            String
+  description     String?
+  isEnabled       Boolean  @default(false)
   enabledForPlans String[] @default([]) // [] = all plans; ["PRO","ENTERPRISE"] = specific
   betaMerchantIds String[] @default([]) // specific merchantIds for beta
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@map("feature_flags")
 }
 
 // Maintenance Windows (نوافذ الصيانة)
 model MaintenanceWindow {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   title           String
   message         String
-  isActive        Boolean  @default(false)
+  isActive        Boolean   @default(false)
   scheduledStart  DateTime?
   scheduledEnd    DateTime?
-  notifyMerchants Boolean  @default(true)
+  notifyMerchants Boolean   @default(true)
   notifiedAt      DateTime?
   createdBy       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@map("maintenance_windows")
 }
 
 // Rate Limit Overrides per plan
 model RateLimitConfig {
-  id          String   @id @default(cuid())
-  plan        String   @unique // STARTER | GROWTH | PRO | ENTERPRISE
-  reqPerMinute Int     @default(60)
-  reqPerDay   Int      @default(10000)
-  burstLimit  Int      @default(20)
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  plan         String   @unique // STARTER | GROWTH | PRO | ENTERPRISE
+  reqPerMinute Int      @default(60)
+  reqPerDay    Int      @default(10000)
+  burstLimit   Int      @default(20)
+  updatedAt    DateTime @updatedAt
 
   @@map("rate_limit_configs")
 }
@@ -2717,11 +2731,11 @@ model RateLimitConfig {
 // ─── LAYER 11: BULK CAMPAIGNS ─────────────────────────────────────────────
 model BulkCampaign {
   id           String    @id @default(cuid())
-  type         String    // EMAIL | SMS
-  subject      String?   // email only
+  type         String // EMAIL | SMS
+  subject      String? // email only
   body         String
-  targetPlan   String?   // null = all plans; "STARTER" | "GROWTH" | "PRO" | "ENTERPRISE"
-  targetRegion String?   // optional filter
+  targetPlan   String? // null = all plans; "STARTER" | "GROWTH" | "PRO" | "ENTERPRISE"
+  targetRegion String? // optional filter
   status       String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | FAILED
   scheduledAt  DateTime?
   sentAt       DateTime?
@@ -2758,17 +2772,17 @@ model MerchantPayment {
   invoiceId     String?
   amount        Decimal   @db.Decimal(10, 3)
   currency      String    @default("BHD")
-  paymentMethod String?   // TAP | MADA | APPLE_PAY | KNET | CARD | MANUAL
+  paymentMethod String? // TAP | MADA | APPLE_PAY | KNET | CARD | MANUAL
   status        String    @default("PENDING") // PENDING | PAID | FAILED | REFUNDED
-  gatewayRef    String?   // Tap charge ID or other ref
-  tapPaymentUrl String?   // hosted payment URL
+  gatewayRef    String? // Tap charge ID or other ref
+  tapPaymentUrl String? // hosted payment URL
   retryCount    Int       @default(0)
   failedAt      DateTime?
   paidAt        DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  store         Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
   @@index([merchantId])
@@ -2788,7 +2802,7 @@ model ApiUsageLog {
   version    String   @default("v1")
   createdAt  DateTime @default(now())
 
-  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
   @@index([createdAt])
@@ -2834,16 +2848,16 @@ model LoginAttempt {
 }
 
 model SecuritySettings {
-  id                    String  @id @default("platform")
-  require2FAForAdmins   Boolean @default(false)
-  ipWhitelistEnabled    Boolean @default(false)
-  maxLoginAttempts      Int     @default(5)
-  banDurationMinutes    Int     @default(30)
-  sessionTimeoutMinutes Int     @default(120)
-  passwordMinLength     Int     @default(8)
-  passwordRequireUpper  Boolean @default(false)
-  passwordRequireNumber Boolean @default(false)
-  passwordExpiryDays    Int     @default(0)
+  id                    String   @id @default("platform")
+  require2FAForAdmins   Boolean  @default(false)
+  ipWhitelistEnabled    Boolean  @default(false)
+  maxLoginAttempts      Int      @default(5)
+  banDurationMinutes    Int      @default(30)
+  sessionTimeoutMinutes Int      @default(120)
+  passwordMinLength     Int      @default(8)
+  passwordRequireUpper  Boolean  @default(false)
+  passwordRequireNumber Boolean  @default(false)
+  passwordExpiryDays    Int      @default(0)
   updatedAt             DateTime @updatedAt
 
   @@map("security_settings")
@@ -2856,8 +2870,8 @@ model SecuritySettings {
 model SupportedLanguage {
   id        String   @id @default(cuid())
   code      String   @unique // e.g. "ar", "en", "fr"
-  name      String           // English name: Arabic
-  nameAr    String           // Arabic name: العربية
+  name      String // English name: Arabic
+  nameAr    String // Arabic name: العربية
   direction String   @default("ltr") // ltr | rtl
   isActive  Boolean  @default(true)
   isDefault Boolean  @default(false)
@@ -2871,12 +2885,12 @@ model SupportedLanguage {
 model SupportedCurrency {
   id            String   @id @default(cuid())
   code          String   @unique // e.g. "BHD", "USD", "SAR"
-  name          String           // English name
-  nameAr        String           // Arabic name
-  symbol        String           // e.g. "BD", "$", "﷼"
-  symbolAr      String?          // Arabic symbol if different
+  name          String // English name
+  nameAr        String // Arabic name
+  symbol        String // e.g. "BD", "$", "﷼"
+  symbolAr      String? // Arabic symbol if different
   exchangeRate  Decimal  @default(1) @db.Decimal(18, 6) // rate vs base currency
-  baseCurrency  Boolean  @default(false)               // only one should be true
+  baseCurrency  Boolean  @default(false) // only one should be true
   decimalPlaces Int      @default(3)
   isActive      Boolean  @default(true)
   updatedAt     DateTime @updatedAt
@@ -2886,32 +2900,32 @@ model SupportedCurrency {
 }
 
 model SupportedCountry {
-  id            String   @id @default(cuid())
-  code          String   @unique // ISO 3166-1 alpha-2: "BH", "SA", "AE"
-  name          String
-  nameAr        String
-  phonePrefix   String?          // e.g. "+973"
-  currencyCode  String?          // default currency for this country
-  isActive      Boolean  @default(true)
-  isDefault     Boolean  @default(false)
-  sortOrder     Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(cuid())
+  code         String   @unique // ISO 3166-1 alpha-2: "BH", "SA", "AE"
+  name         String
+  nameAr       String
+  phonePrefix  String? // e.g. "+973"
+  currencyCode String? // default currency for this country
+  isActive     Boolean  @default(true)
+  isDefault    Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@map("supported_countries")
 }
 
 model PlatformConfig {
-  id               String  @id @default("platform")
+  id               String   @id @default("platform")
   // Identity
-  platformName     String  @default("BahrainStore")
-  platformNameAr   String  @default("بحرين ستور")
+  platformName     String   @default("BahrainStore")
+  platformNameAr   String   @default("بحرين ستور")
   logoUrl          String?
   faviconUrl       String?
   // Branding colors
-  primaryColor     String  @default("#3b82f6")
-  secondaryColor   String  @default("#8b5cf6")
-  accentColor      String  @default("#06b6d4")
+  primaryColor     String   @default("#3b82f6")
+  secondaryColor   String   @default("#8b5cf6")
+  accentColor      String   @default("#06b6d4")
   // Company info (for invoices & emails)
   companyName      String?
   companyNameAr    String?
@@ -2930,9 +2944,61 @@ model PlatformConfig {
   // Meta
   supportEmail     String?
   supportPhone     String?
-  baseCurrency     String  @default("BHD")
-  defaultLanguage  String  @default("ar")
+  baseCurrency     String   @default("BHD")
+  defaultLanguage  String   @default("ar")
   updatedAt        DateTime @updatedAt
 
   @@map("platform_config")
+}
+
+// ??????????????????????????????????????????????????????????????????????
+// NEXT-GEN THEME ENGINE
+// ??????????????????????????????????????????????????????????????????????
+
+model ThemeAsset {
+  id        String   @id @default(cuid())
+  themeId   String
+  key       String
+  content   String?  @db.Text
+  url       String?
+  mimeType  String   @default("application/json")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  theme Theme @relation(fields: [themeId], references: [id], onDelete: Cascade)
+
+  @@unique([themeId, key])
+  @@map("theme_assets")
+}
+
+model StoreThemeConfig {
+  id           String   @id @default(cuid())
+  storeId      String
+  themeId      String
+  role         String   @default("main")
+  settingsData Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  store         Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  theme         Theme               @relation(fields: [themeId], references: [id], onDelete: Cascade)
+  pageTemplates StorePageTemplate[]
+
+  @@map("store_theme_configs")
+}
+
+model StorePageTemplate {
+  id            String   @id @default(cuid())
+  storeId       String
+  themeConfigId String
+  pageType      String
+  content       Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  store       Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  themeConfig StoreThemeConfig @relation(fields: [themeConfigId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, themeConfigId, pageType])
+  @@map("store_page_templates")
 }

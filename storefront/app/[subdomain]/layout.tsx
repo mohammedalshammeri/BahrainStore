@@ -1,4 +1,3 @@
-import { api } from "@/lib/api";
 import type { StorePublic } from "@/lib/types";
 import { Navbar } from "@/components/layout/navbar";
 import { Footer } from "@/components/layout/footer";
@@ -6,55 +5,30 @@ import { PageViewTracker } from "@/components/ui/page-view-tracker";
 import { FlashSaleBanner } from "@/components/ui/flash-sale-banner";
 import { PopupDisplay } from "@/components/ui/popup-display";
 import { CountdownTimerBanner } from "@/components/ui/countdown-timer-banner";
+import { PreviewThemeBridge } from "@/components/theme/PreviewThemeBridge";
 import { notFound } from "next/navigation";
+import { getPublicPixels, getPublicStore, type StorePixels } from "@/lib/storefront-server";
 
 const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
 function safeColor(value: string | undefined, fallback: string) {
   return value && HEX_RE.test(value) ? value : fallback;
 }
 
-const FONT_URLS: Record<string, string> = {
-  Cairo: "Cairo:wght@400;500;600;700",
-  Tajawal: "Tajawal:wght@400;500;700",
-  "Noto Sans Arabic": "Noto+Sans+Arabic:wght@400;500;700",
-  "Readex Pro": "Readex+Pro:wght@400;500;700",
-};
-
-interface StorePixels {
-  googleTagId?: string | null;
-  facebookPixelId?: string | null;
-  tiktokPixelId?: string | null;
-  snapchatPixelId?: string | null;
-  googleAdsId?: string | null;
-}
-
-async function getStore(subdomain: string): Promise<StorePublic | null> {
-  try {
-    const res = await api.get(`/stores/s/${subdomain}`);
-    return res.data.store;
-  } catch {
-    return null;
-  }
-}
-
-async function getPixels(subdomain: string): Promise<StorePixels> {
-  try {
-    const res = await api.get(`/marketing/public/${subdomain}/pixels`);
-    return res.data as StorePixels;
-  } catch {
-    return {};
-  }
-}
-
 export default async function StoreLayout({
   children,
   params,
+  searchParams,
 }: {
   children: React.ReactNode;
   params: Promise<{ subdomain: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { subdomain } = await params;
-  const [store, pixels] = await Promise.all([getStore(subdomain), getPixels(subdomain)]);
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const [store, pixels] = await Promise.all([
+    getPublicStore(subdomain).catch(() => null),
+    getPublicPixels(subdomain),
+  ]);
 
   if (!store) notFound();
 
@@ -62,18 +36,11 @@ export default async function StoreLayout({
   const secondaryColor = safeColor(store.settings?.secondaryColor, "#f97316");
   const fontFamily = store.settings?.fontFamily ?? "Cairo";
   const theme = store.settings?.theme ?? "default";
-  const fontUrl = FONT_URLS[fontFamily] ?? FONT_URLS["Cairo"];
+  const previewEnabled = resolvedSearchParams.__builderPreview === "1";
+  const previewOrigin = typeof resolvedSearchParams.__builderOrigin === "string" ? resolvedSearchParams.__builderOrigin : undefined;
 
   return (
     <>
-      <link rel="preconnect" href="https://fonts.googleapis.com" />
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-      <link
-        rel="stylesheet"
-        href={`https://fonts.googleapis.com/css2?family=${fontUrl}&display=swap`}
-      />
-      <style>{`:root{--store-primary:${primaryColor};--store-secondary:${secondaryColor};}body{font-family:'${fontFamily}',sans-serif;}`}</style>
-
       {/* Marketing Pixels */}
       {pixels.googleTagId && (
         <>
@@ -91,7 +58,16 @@ export default async function StoreLayout({
         <script dangerouslySetInnerHTML={{ __html: `(function(e,t,n){if(e.snaptr)return;var a=e.snaptr=function(){a.handleRequest?a.handleRequest.apply(a,arguments):a.queue.push(arguments)};a.queue=[];var s='script';r=t.createElement(s);r.async=!0;r.src=n;var u=t.getElementsByTagName(s)[0];u.parentNode.insertBefore(r,u);})(window,document,'https://sc-static.net/scevent.min.js');snaptr('init','${pixels.snapchatPixelId}');snaptr('track','PAGE_VIEW');` }} />
       )}
 
-      <div className="flex flex-col min-h-screen" data-theme={theme}>
+      <PreviewThemeBridge
+        previewEnabled={previewEnabled}
+        previewOrigin={previewOrigin}
+        initialSettings={{
+          primaryColor,
+          secondaryColor,
+          fontFamily,
+          themeVariant: theme,
+        }}
+      >
         <PageViewTracker storeId={store.id} />
         <FlashSaleBanner subdomain={subdomain} />
         <CountdownTimerBanner storeId={store.id} />
@@ -99,7 +75,7 @@ export default async function StoreLayout({
         <Navbar store={store} />
         <main className="flex-1">{children}</main>
         <Footer store={store} />
-      </div>
+      </PreviewThemeBridge>
     </>
   );
 }

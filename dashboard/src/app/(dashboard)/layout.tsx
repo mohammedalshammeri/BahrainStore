@@ -16,7 +16,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       return;
     }
     // Re-hydrate merchant + store from API (handles page refreshes / new tabs)
-    if (!merchant) {
+    if (!merchant || (merchant.isAdmin && merchant.platformAccess === undefined)) {
       api.get("/auth/me").then((res) => {
         if (res.data?.merchant) setMerchant(res.data.merchant);
       }).catch(() => {});

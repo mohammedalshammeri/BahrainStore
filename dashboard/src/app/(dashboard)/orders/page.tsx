@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useAuthStore } from "@/store/auth.store";
 import { api } from "@/lib/api";
+import { getPublicApiUrl } from "@/lib/env";
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { orderStatusBadge, paymentStatusBadge } from "@/components/ui/badge";
@@ -31,6 +32,21 @@ export default function OrdersPage() {
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
 
+  const aramexReady = Boolean(
+    store?.settings?.aramexEnabled &&
+    store.settings.aramexUser &&
+    store.settings.aramexPassword &&
+    store.settings.aramexAccountNumber &&
+    store.settings.aramexPinCode
+  );
+  const dhlReady = Boolean(
+    store?.settings?.dhlEnabled &&
+    store.settings.dhlApiKey &&
+    store.settings.dhlAccountNumber
+  );
+  const shipmentCarrier = aramexReady ? "aramex" : dhlReady ? "dhl" : null;
+  const shipmentCarrierLabel = aramexReady ? "Aramex" : dhlReady ? "DHL" : null;
+
   const { data, isLoading } = useQuery({
     queryKey: ["orders", store?.id, search, status, page],
     queryFn: async () => {
@@ -49,8 +65,8 @@ export default function OrdersPage() {
   });
 
   const createShipmentMutation = useMutation({
-    mutationFn: (orderId: string) =>
-      api.post(`/orders/${orderId}/shipment`, { carrier: "aramex", weightKg: 1 }),
+    mutationFn: ({ orderId, carrier }: { orderId: string; carrier: "aramex" | "dhl" }) =>
+      api.post(`/orders/${orderId}/shipment`, { carrier, weightKg: 1 }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["orders"] }),
   });
 
@@ -89,6 +105,12 @@ export default function OrdersPage() {
               </select>
             </div>
           </div>
+
+          {!shipmentCarrier && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              إنشاء الشحنات التلقائي معطّل حالياً لأن إعدادات Aramex وDHL غير مكتملة في المتجر.
+            </p>
+          )}
 
           <Link
             href="/orders/draft"
@@ -176,7 +198,7 @@ export default function OrdersPage() {
                             </button>
                           </Link>
                           <a
-                            href={`${process.env.NEXT_PUBLIC_API_URL}/orders/${order.id}/shipping-label`}
+                            href={`${getPublicApiUrl()}/orders/${order.id}/shipping-label`}
                             target="_blank"
                             rel="noreferrer"
                             className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
@@ -184,12 +206,12 @@ export default function OrdersPage() {
                           >
                             <Printer className="h-3.5 w-3.5" />
                           </a>
-                          {!order.trackingNumber && (
+                          {!order.trackingNumber && shipmentCarrier && (
                             <button
-                              onClick={() => createShipmentMutation.mutate(order.id)}
+                              onClick={() => createShipmentMutation.mutate({ orderId: order.id, carrier: shipmentCarrier })}
                               disabled={createShipmentMutation.isPending}
                               className="flex h-8 px-2 items-center justify-center rounded-lg text-xs text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 transition-colors disabled:opacity-50"
-                              title="إنشاء شحنة Aramex"
+                              title={`إنشاء شحنة ${shipmentCarrierLabel}`}
                             >
                               <Truck className="h-3.5 w-3.5" />
                             </button>
