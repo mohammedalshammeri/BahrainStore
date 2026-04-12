@@ -703,11 +703,12 @@ export async function authRoutes(app: FastifyInstance) {
 function buildRefreshCookie(token: string): string {
   const maxAge = 30 * 24 * 3600
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
-  return `refreshToken=${token}; HttpOnly${secure}; SameSite=Strict; Path=/api/v1/auth; Max-Age=${maxAge}`
+  return `refreshToken=${token}; HttpOnly${secure}; SameSite=Strict; Path=/; Max-Age=${maxAge}`
 }
 
 function clearRefreshCookie(): string {
-  return `refreshToken=; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth; Max-Age=0`
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
+  return `refreshToken=; HttpOnly${secure}; SameSite=Strict; Path=/; Max-Age=0`
 }
 
 async function generateTokens(app: FastifyInstance, merchantId: string) {

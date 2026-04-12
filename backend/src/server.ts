@@ -172,6 +172,7 @@ export async function buildServer() {
 
   // ── Routes ────────────────────────────────────
   await app.register(authRoutes, { prefix: '/api/v1/auth' })
+  await app.register(authRoutes, { prefix: '/auth' })
   await app.register(storeRoutes, { prefix: '/api/v1/stores' })
   await app.register(productRoutes, { prefix: '/api/v1/products' })
   await app.register(categoryRoutes, { prefix: '/api/v1/categories' })
