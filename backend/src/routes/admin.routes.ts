@@ -577,47 +577,6 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.send({ success: true })
   })
 
-  // ── Themes marketplace (CRUD) ──────────────────────────────────────────────
-  app.get('/themes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
-    const { page = '1', limit = '20', search } = req.query as Record<string, string>
-    const skip = (parseInt(page) - 1) * parseInt(limit)
-    const where: any = search
-      ? { OR: [{ name: { contains: search, mode: 'insensitive' } }, { nameAr: { contains: search, mode: 'insensitive' } }] }
-      : {}
-
-    const [themes, total] = await Promise.all([
-      prisma.theme.findMany({
-        where,
-        include: { _count: { select: { purchases: true } } },
-        skip,
-        take: parseInt(limit),
-        orderBy: { createdAt: 'desc' },
-      }),
-      prisma.theme.count({ where }),
-    ])
-
-    return reply.send({ themes, total, pages: Math.ceil(total / parseInt(limit)) })
-  })
-
-  app.post('/themes', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
-    const body = req.body as any
-    const theme = await prisma.theme.create({ data: body })
-    return reply.status(201).send({ theme })
-  })
-
-  app.patch('/themes/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
-    const { id } = req.params as { id: string }
-    const body = req.body as any
-    const theme = await prisma.theme.update({ where: { id }, data: body })
-    return reply.send({ theme })
-  })
-
-  app.delete('/themes/:id', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canManageApps')] }, async (req, reply) => {
-    const { id } = req.params as { id: string }
-    await prisma.theme.delete({ where: { id } })
-    return reply.send({ success: true })
-  })
-
   // ── Support tickets (platform-wide) ──────────────────────────────────────
   app.get('/support', { preHandler: [authenticate, requireAdmin, requirePlatformPermission('canReplyTickets')] }, async (req, reply) => {
     const { page = '1', limit = '20', status, priority } = req.query as Record<string, string>
