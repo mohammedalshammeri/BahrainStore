@@ -4,12 +4,14 @@ import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
 import { createOrderTrackingToken, verifyOrderTrackingToken } from '../lib/order-tracking'
-import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../lib/email'
+import { sendMerchantNewOrderEmail, sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../lib/email'
 import { sendWhatsAppOrderConfirmation, sendWhatsAppStatusUpdate } from '../lib/whatsapp'
 import { sendOrderConfirmationSms, sendOrderStatusUpdateSms } from '../lib/sms'
 import { createAramexShipment } from '../lib/aramex'
 import { createDhlShipment } from '../lib/dhl'
 import { issueBenefitPayRefund } from './benefitpay.routes'
+import { fireWebhook } from './webhook.routes'
+import { processLoanRepayment } from '../lib/finance-repayment'
 
 const inventoryConflictPrefix = 'INSUFFICIENT_STOCK:'
 const ORDER_DISPUTE_SUBJECT_PREFIX = 'ORDER_DISPUTE'
@@ -104,7 +106,9 @@ async function syncOrderRefundStatus(orderId: string, orderTotal: number, orderS
 
 export async function orderRoutes(app: FastifyInstance) {
   // ── Create Order ──────────────────────────────
-  app.post('/', async (request, reply) => {
+  app.post('/', {
+    config: { rateLimit: { max: 20, timeWindow: '10 minutes' } },
+  }, async (request, reply) => {
     const result = createOrderSchema.safeParse(request.body)
     if (!result.success) {
       return reply.status(400).send({ error: 'بيانات غير صحيحة', details: result.error.flatten().fieldErrors })
@@ -174,6 +178,21 @@ export async function orderRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: `المخزون غير كافي للمنتج: ${product.nameAr}` })
       }
 
+      // Apply active flash sale discount if available
+      const flashNow = new Date()
+      const flashItem = await prisma.flashSaleItem.findFirst({
+        where: {
+          productId: item.productId,
+          flashSale: { storeId, isActive: true, startsAt: { lte: flashNow }, endsAt: { gte: flashNow } },
+        },
+        include: { flashSale: { select: { discountType: true, discountValue: true } } },
+      })
+      if (flashItem) {
+        price = flashItem.flashSale.discountType === 'PERCENTAGE'
+          ? price * (1 - Number(flashItem.flashSale.discountValue) / 100)
+          : Math.max(0, price - Number(flashItem.flashSale.discountValue))
+      }
+
       const total = price * item.quantity
       subtotal += total
 
@@ -193,13 +212,24 @@ export async function orderRoutes(app: FastifyInstance) {
 
     // Coupon validation
     let discountAmount = 0
+    let coupon: Awaited<ReturnType<typeof prisma.coupon.findUnique<{ where: { storeId_code: { storeId: string; code: string } } }>>> | null = null
     if (couponCode) {
-      const coupon = await prisma.coupon.findUnique({ where: { storeId_code: { storeId, code: couponCode.toUpperCase() } } })
+      coupon = await prisma.coupon.findUnique({ where: { storeId_code: { storeId, code: couponCode.toUpperCase() } } })
       if (!coupon || !coupon.isActive) return reply.status(400).send({ error: 'كود الخصم غير صحيح' })
       if (coupon.expiresAt && coupon.expiresAt < new Date()) return reply.status(400).send({ error: 'كود الخصم منتهي الصلاحية' })
-      if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) return reply.status(400).send({ error: 'كود الخصم تجاوز الحد الأقصى' })
+      // NOTE: maxUses check is done atomically inside the transaction to prevent race conditions (LOGIC-002)
       if (coupon.minOrderValue && subtotal < Number(coupon.minOrderValue)) {
         return reply.status(400).send({ error: `الحد الأدنى للطلب ${coupon.minOrderValue} BHD` })
+      }
+
+      // LOGIC-001: Per-customer coupon usage check
+      if (coupon.maxUsesPerCustomer) {
+        const customerUsageCount = await prisma.couponUsage.count({
+          where: { couponId: coupon.id, customerId },
+        })
+        if (customerUsageCount >= coupon.maxUsesPerCustomer) {
+          return reply.status(400).send({ error: 'لقد استخدمت هذا الكوبون الحد الأقصى المسموح به' })
+        }
       }
 
       discountAmount = coupon.type === 'PERCENTAGE'
@@ -271,12 +301,21 @@ export async function orderRoutes(app: FastifyInstance) {
         },
         })
 
-        // Update coupon usage
-        if (couponCode) {
-          await tx.coupon.update({
-            where: { storeId_code: { storeId, code: couponCode.toUpperCase() } },
-            data: { usedCount: { increment: 1 } },
-          })
+        // Update coupon usage — atomic maxUses guard (LOGIC-002) + per-customer record (LOGIC-001)
+        if (couponCode && coupon) {
+          // Atomic: increment usedCount only if under the global limit
+          // This raw UPDATE returns the number of rows affected, preventing race conditions
+          const affected = await tx.$executeRaw`
+            UPDATE "coupons"
+            SET "usedCount" = "usedCount" + 1
+            WHERE id = ${coupon.id}
+              AND ("maxUses" IS NULL OR "usedCount" < "maxUses")
+          `
+          if (affected === 0) {
+            throw new Error('COUPON_EXHAUSTED')
+          }
+          // Record per-customer usage (one row per redemption)
+          await tx.couponUsage.create({ data: { couponId: coupon.id, customerId } })
         }
 
         // Update customer stats
@@ -290,6 +329,9 @@ export async function orderRoutes(app: FastifyInstance) {
     } catch (error) {
       if (error instanceof Error && error.message.startsWith(inventoryConflictPrefix)) {
         return reply.status(409).send({ error: `المخزون لم يعد كافياً للمنتج: ${error.message.slice(inventoryConflictPrefix.length)}` })
+      }
+      if (error instanceof Error && error.message === 'COUPON_EXHAUSTED') {
+        return reply.status(409).send({ error: 'كود الخصم تجاوز الحد الأقصى من الاستخدامات' })
       }
 
       throw error
@@ -358,6 +400,39 @@ export async function orderRoutes(app: FastifyInstance) {
         { accountSid: settings.smsTwilioSid, authToken: settings.smsTwilioToken, from: settings.smsTwilioFrom }
       ).catch((err: unknown) => console.error('SMS send failed:', err))
     }
+
+    // Fire webhooks (fire-and-forget)
+    fireWebhook(storeId, 'ORDER_CREATED', {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      total: Number(order.total),
+      paymentMethod: order.paymentMethod,
+    }).catch(() => {})
+
+    // Deduct from active Bazar Finance loan if store has one (fire-and-forget)
+    if (order.paymentStatus === 'PAID') {
+      processLoanRepayment(storeId, order.id, Number(order.total)).catch(console.error)
+    }
+
+    // Notify merchant about new order (fire-and-forget)
+    prisma.merchant.findUnique({
+      where: { id: store.merchantId },
+      select: { email: true, firstName: true },
+    }).then((merchant) => {
+      if (!merchant) return
+      const dashboardUrl = `${process.env.DASHBOARD_URL ?? 'http://localhost:3002'}/orders/${order.id}`
+      sendMerchantNewOrderEmail({
+        to: merchant.email,
+        merchantName: merchant.firstName,
+        storeName: store.nameAr,
+        orderNumber: order.orderNumber,
+        total: Number(order.total),
+        currency: store.currency,
+        customerName: `${(order.customer as any)?.firstName ?? ''} ${(order.customer as any)?.lastName ?? ''}`.trim(),
+        itemCount: order.items.length,
+        dashboardUrl,
+      }).catch(() => {})
+    }).catch(() => {})
 
     return reply.status(201).send({
       message: 'تم إنشاء الطلب بنجاح',

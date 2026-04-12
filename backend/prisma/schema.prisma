@@ -10,6 +10,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum KycStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum SessionKind {
+  REFRESH
+  OAUTH_EXCHANGE
+  GOOGLE_OAUTH_EXCHANGE
+}
+
 // ─────────────────────────────────────────────
 // MERCHANTS (التجار)
 // ─────────────────────────────────────────────
@@ -33,7 +46,7 @@ model Merchant {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  kycStatus String @default("NONE") // NONE | PENDING | APPROVED | REJECTED
+  kycStatus KycStatus @default(NONE)
 
   stores            Store[]
   sessions          Session[]
@@ -41,14 +54,28 @@ model Merchant {
   platformReferrals MerchantReferral[]
   kycDocuments      KycDocument[]
   termsAcceptances  TermsAcceptance[]
+  backupCodes       TwoFactorBackupCode[]
 
   @@map("merchants")
+}
+
+model TwoFactorBackupCode {
+  id         String    @id @default(cuid())
+  merchantId String
+  codeHash   String
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@map("two_factor_backup_codes")
 }
 
 model Session {
   id           String   @id @default(cuid())
   merchantId   String
-  kind         String   @default("REFRESH")
+  kind         SessionKind @default(REFRESH)
   refreshToken String   @unique
   expiresAt    DateTime
   createdAt    DateTime @default(now())
@@ -370,8 +397,11 @@ model Product {
   liveStreamProducts LiveStreamProduct[]
   productViews       ProductView[]
   warehouseStocks    WarehouseStock[]
+  inventoryLogs      InventoryLog[]
 
   @@unique([storeId, slug])
+  @@index([storeId, isActive])
+  @@index([storeId, isFeatured])
   @@map("products")
 }
 
@@ -535,6 +565,9 @@ model Order {
   returns  OrderReturn[]
 
   @@unique([storeId, orderNumber])
+  @@index([storeId, createdAt])
+  @@index([storeId, status])
+  @@index([storeId, paymentStatus])
   @@map("orders")
 }
 
@@ -630,14 +663,16 @@ model Coupon {
   type          CouponType
   value         Decimal    @db.Decimal(10, 3)
   minOrderValue Decimal?   @db.Decimal(10, 3)
-  maxUses       Int?
-  usedCount     Int        @default(0)
-  isActive      Boolean    @default(true)
-  expiresAt     DateTime?
-  createdAt     DateTime   @default(now())
+  maxUses            Int?
+  maxUsesPerCustomer Int?
+  usedCount          Int        @default(0)
+  isActive           Boolean    @default(true)
+  expiresAt          DateTime?
+  createdAt          DateTime   @default(now())
 
-  store Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  rules CouponRule[]
+  store  Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  rules  CouponRule[]
+  usages CouponUsage[]
 
   @@unique([storeId, code])
   @@map("coupons")
@@ -1604,6 +1639,42 @@ model CouponRule {
   coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
 
   @@map("coupon_rules")
+}
+
+// ─────────────────────────────────────────────
+// COUPON USAGE (استخدامات الكوبون لكل عميل)
+// ─────────────────────────────────────────────
+model CouponUsage {
+  id         String   @id @default(cuid())
+  couponId   String
+  customerId String
+  createdAt  DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  @@index([couponId, customerId])
+  @@map("coupon_usages")
+}
+
+// ─────────────────────────────────────────────
+// INVENTORY LOG (سجل تعديلات المخزون)
+// ─────────────────────────────────────────────
+model InventoryLog {
+  id            String   @id @default(cuid())
+  productId     String
+  storeId       String
+  merchantId    String
+  quantity      Int
+  previousStock Int
+  currentStock  Int
+  reason        String?
+  createdAt     DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
+  @@index([storeId, createdAt])
+  @@map("inventory_logs")
 }
 
 // ─────────────────────────────────────────────

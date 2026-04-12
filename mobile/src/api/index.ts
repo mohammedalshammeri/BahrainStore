@@ -15,16 +15,68 @@ api.interceptors.request.use(async (config) => {
   return config
 })
 
+// LOGIC-008: Track refresh state to queue concurrent requests
+let isRefreshing = false
+let pendingQueue: Array<{ resolve: (token: string) => void; reject: (err: unknown) => void }> = []
+
+function processQueue(error: unknown, token: string | null = null) {
+  pendingQueue.forEach((p) => (error ? p.reject(error) : p.resolve(token!)))
+  pendingQueue = []
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
-    if (error?.response?.status === 401) {
-      await SecureStore.deleteItemAsync(STORAGE_KEYS.authToken)
-      await SecureStore.deleteItemAsync(STORAGE_KEYS.user)
-      await SecureStore.deleteItemAsync(STORAGE_KEYS.currentStoreId)
-      const { useAuthStore } = await import('@/store/auth.store')
-      useAuthStore.setState({ user: null, token: null, currentStore: null, isAuthenticated: false })
+    const original = error.config
+
+    if (error?.response?.status === 401 && !original._retry) {
+      if (isRefreshing) {
+        // Wait for the ongoing refresh to complete, then retry with new token
+        return new Promise((resolve, reject) => {
+          pendingQueue.push({ resolve, reject })
+        }).then((token) => {
+          original.headers.Authorization = `Bearer ${token}`
+          return api(original)
+        })
+      }
+
+      original._retry = true
+      isRefreshing = true
+
+      try {
+        // Attempt to refresh using stored refresh token
+        const refreshToken = await SecureStore.getItemAsync(STORAGE_KEYS.refreshToken)
+        if (!refreshToken) throw new Error('NO_REFRESH_TOKEN')
+
+        const { data } = await axios.post(`${API_URL}/auth/refresh`, { refreshToken })
+        const newAccessToken: string = data.accessToken
+        const newRefreshToken: string = data.refreshToken ?? refreshToken
+
+        await SecureStore.setItemAsync(STORAGE_KEYS.authToken, newAccessToken)
+        await SecureStore.setItemAsync(STORAGE_KEYS.refreshToken, newRefreshToken)
+
+        const { useAuthStore } = await import('@/store/auth.store')
+        useAuthStore.setState({ token: newAccessToken })
+
+        api.defaults.headers.common.Authorization = `Bearer ${newAccessToken}`
+        processQueue(null, newAccessToken)
+        original.headers.Authorization = `Bearer ${newAccessToken}`
+        return api(original)
+      } catch {
+        // Refresh failed — log out
+        processQueue(error, null)
+        await SecureStore.deleteItemAsync(STORAGE_KEYS.authToken)
+        await SecureStore.deleteItemAsync(STORAGE_KEYS.refreshToken)
+        await SecureStore.deleteItemAsync(STORAGE_KEYS.user)
+        await SecureStore.deleteItemAsync(STORAGE_KEYS.currentStoreId)
+        const { useAuthStore } = await import('@/store/auth.store')
+        useAuthStore.setState({ user: null, token: null, currentStore: null, isAuthenticated: false })
+        return Promise.reject(error)
+      } finally {
+        isRefreshing = false
+      }
     }
+
     return Promise.reject(error)
   }
 )

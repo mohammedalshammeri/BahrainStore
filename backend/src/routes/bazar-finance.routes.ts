@@ -19,17 +19,20 @@ async function calculateEligibility(storeId: string): Promise<{
 }> {
   const sixMonthsAgo = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000)
 
-  const monthlyRevenue = await prisma.$queryRaw<Array<{ month: string; revenue: number }>>`
-    SELECT 
-      TO_CHAR(DATE_TRUNC('month', "created_at"), 'YYYY-MM') as month,
-      SUM(total) as revenue
-    FROM orders
-    WHERE store_id = ${storeId}
-      AND payment_status = 'PAID'
-      AND created_at >= ${sixMonthsAgo}
-    GROUP BY DATE_TRUNC('month', "created_at")
-    ORDER BY month ASC
-  `
+  // LOGIC-010: Replace $queryRaw with Prisma API to avoid hardcoded column names
+  const paidOrders = await prisma.order.findMany({
+    where: { storeId, paymentStatus: 'PAID', createdAt: { gte: sixMonthsAgo } },
+    select: { createdAt: true, total: true },
+  })
+
+  const monthMap = new Map<string, number>()
+  for (const o of paidOrders) {
+    const monthKey = o.createdAt.toISOString().slice(0, 7) // 'YYYY-MM'
+    monthMap.set(monthKey, (monthMap.get(monthKey) ?? 0) + Number(o.total))
+  }
+  const monthlyRevenue = Array.from(monthMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, revenue]) => ({ month, revenue }))
 
   if (monthlyRevenue.length < 2) {
     return { eligible: false, maxAmount: 0, avgMonthlySales: 0, salesHistory: [], reason: 'تحتاج إلى 2 أشهر على الأقل من المبيعات' }

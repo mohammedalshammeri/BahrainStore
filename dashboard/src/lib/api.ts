@@ -5,7 +5,7 @@ import { getPublicApiUrl } from "@/lib/env";
 export const api = axios.create({
   baseURL: getPublicApiUrl(),
   headers: { "Content-Type": "application/json" },
-  withCredentials: false,
+  withCredentials: true,
 });
 
 function cookieOptions(expires?: number): Cookies.CookieAttributes {
@@ -23,9 +23,7 @@ export function getAccessToken() {
   return Cookies.get("accessToken") ?? null;
 }
 
-export function getRefreshToken() {
-  return Cookies.get("refreshToken") ?? null;
-}
+// refreshToken is now an httpOnly cookie managed by the server — not accessible from JS
 
 // ─── Request Interceptor: attach access token ──────────
 api.interceptors.request.use((config) => {
@@ -68,18 +66,11 @@ api.interceptors.response.use(
       original._retry = true;
       isRefreshing = true;
 
-      const refreshToken = getRefreshToken();
-      if (!refreshToken) {
-        isRefreshing = false;
-        clearAuth();
-        window.location.href = "/login";
-        return Promise.reject(error);
-      }
-
       try {
         const { data } = await axios.post(
           `${getPublicApiUrl()}/auth/refresh`,
-          { refreshToken }
+          {}, // refreshToken is sent automatically as an httpOnly cookie
+          { withCredentials: true }
         );
         const newToken: string = data.accessToken;
         Cookies.set("accessToken", newToken, cookieOptions(1 / 96));
@@ -101,16 +92,17 @@ api.interceptors.response.use(
   }
 );
 
-export function setAuth(accessToken: string, refreshToken: string) {
+export function setAuth(accessToken: string, refreshToken?: string) {
+  // refreshToken is ignored here — the server sets it as an httpOnly cookie
+  void refreshToken;
   Cookies.set("accessToken", accessToken, cookieOptions(1 / 96));
-  Cookies.set("refreshToken", refreshToken, cookieOptions(30));
 }
 
 export function clearAuth() {
   Cookies.remove("accessToken", { path: "/" });
-  Cookies.remove("refreshToken", { path: "/" });
+  // The httpOnly refreshToken cookie is cleared by the server via POST /auth/logout
 }
 
 export function isAuthenticated(): boolean {
-  return !!getAccessToken() || !!getRefreshToken();
+  return !!getAccessToken();
 }

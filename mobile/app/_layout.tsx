@@ -63,6 +63,37 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     registerPush()
   }, [isAuthenticated, token, currentStore?.id])
 
+  // Handle incoming notifications and taps (NEW-004)
+  useEffect(() => {
+    // Foreground: notification arrives while app is open — display is handled by setNotificationHandler above.
+    const receivedSub = Notifications.addNotificationReceivedListener((_notification) => {
+      // Nothing extra needed — setNotificationHandler already shows the alert.
+    })
+
+    // Background/killed: user taps on the notification to open the app
+    const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as Record<string, unknown> | undefined
+      if (!data) return
+      // Navigate based on notification type
+      if (data.type === 'new_order' || data.orderId) {
+        if (data.orderId) {
+          router.push(`/orders/${data.orderId}` as any)
+        } else {
+          router.push('/(tabs)/orders' as any)
+        }
+      } else if (data.type === 'low_stock' || data.productId) {
+        router.push('/(tabs)/products' as any)
+      } else if (data.type === 'kyc_update') {
+        router.push('/(tabs)/settings' as any)
+      }
+    })
+
+    return () => {
+      receivedSub.remove()
+      responseSub.remove()
+    }
+  }, [])
+
   if (isLoading) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background }}>

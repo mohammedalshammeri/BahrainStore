@@ -59,7 +59,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     await Promise.all([
-      SecureStore.setItemAsync(STORAGE_KEYS.authToken, data.token),
+      SecureStore.setItemAsync(STORAGE_KEYS.authToken, data.token || data.accessToken || ''),
+      SecureStore.setItemAsync(STORAGE_KEYS.refreshToken, data.refreshToken || ''),
       SecureStore.setItemAsync(STORAGE_KEYS.user, JSON.stringify(user)),
       SecureStore.setItemAsync(STORAGE_KEYS.currentStoreId, user.currentStoreId ?? ''),
     ])
@@ -75,6 +76,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     await Promise.all([
       SecureStore.deleteItemAsync(STORAGE_KEYS.authToken),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.refreshToken),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.refreshToken),
       SecureStore.deleteItemAsync(STORAGE_KEYS.user),
       SecureStore.deleteItemAsync(STORAGE_KEYS.currentStoreId),
     ])

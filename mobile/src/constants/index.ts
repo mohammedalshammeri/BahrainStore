@@ -71,6 +71,7 @@ export const PAYMENT_STATUS_LABELS: Record<string, { ar: string; color: string }
 
 export const STORAGE_KEYS = {
   authToken: 'bazar_auth_token',
+  refreshToken: 'bazar_refresh_token',
   currentStoreId: 'bazar_current_store',
   user: 'bazar_user',
 }

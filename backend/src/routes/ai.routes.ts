@@ -146,11 +146,11 @@ export async function aiRoutes(app: FastifyInstance) {
 
     if (!store) return reply.status(404).send({ error: 'المتجر غير موجود' })
 
-    // Fetch last 10 chat history for context
+    // Fetch last 50 messages for richer context (LOGIC-009)
     const chatHistory = await prisma.aiChat.findMany({
       where: { storeId },
       orderBy: { createdAt: 'desc' },
-      take: 10,
+      take: 50,
       select: { role: true, message: true },
     })
 
@@ -174,6 +174,11 @@ export async function aiRoutes(app: FastifyInstance) {
 
       // Save assistant response
       await prisma.aiChat.create({ data: { storeId, role: 'assistant', message: response } })
+
+      // LOGIC-009: Prune records older than 90 days to prevent unbounded DB growth
+      await prisma.aiChat.deleteMany({
+        where: { storeId, createdAt: { lt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) } },
+      })
 
       return reply.send({ success: true, response, model: AI_MODEL, capabilityStatus: getAICapabilityState() })
     } catch (err: any) {

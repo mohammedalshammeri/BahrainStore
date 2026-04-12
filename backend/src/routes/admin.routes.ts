@@ -7,6 +7,7 @@ import { sendSms } from '../lib/sms'
 import { THEME_CHANGELOG_ASSET_KEYS, THEME_MANIFEST_ASSET_KEY, buildThemeManifestAsset, buildThemePackageBuffer, parseThemePackageBuffer, resolveThemeChangelogFromAssets, resolveThemeManifestFromAssets, themePackageManifestSchema } from '../lib/theme-package'
 import { adminKycRoutes } from './admin-kyc.routes'
 import crypto from 'crypto'
+import { getEnv } from '../lib/env'
 
 const adminThemeSchema = z.object({
   slug: z.string().min(3).regex(/^[a-z0-9-]+$/),
@@ -67,7 +68,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!email || !setupToken) {
       return reply.status(400).send({ error: 'email و setupToken مطلوبان' })
     }
-    if (setupToken !== process.env.ADMIN_SETUP_TOKEN) {
+    if (setupToken !== getEnv().ADMIN_SETUP_TOKEN) {
       return reply.status(403).send({ error: 'رمز الإعداد غير صحيح' })
     }
     const merchant = await prisma.merchant.update({

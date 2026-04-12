@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
+import { checkPlanLimit } from '../lib/plan-limits'
+import { fireWebhook } from './webhook.routes'
 
 const createProductSchema = z.object({
   storeId: z.string().cuid(),
@@ -42,6 +44,17 @@ export async function productRoutes(app: FastifyInstance) {
     const store = await prisma.store.findFirst({ where: { id: data.storeId, merchantId } })
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
+    const planCheck = await checkPlanLimit(data.storeId, 'products')
+    if (!planCheck.allowed) {
+      return reply.status(403).send({
+        error: `وصلت للحد الأقصى من المنتجات في خطتك ${planCheck.plan} (${planCheck.limit} منتج). قم بترقية خطتك للإضافة المزيد.`,
+        code: 'PLAN_LIMIT_EXCEEDED',
+        limit: planCheck.limit,
+        current: planCheck.current,
+        plan: planCheck.plan,
+      })
+    }
+
     const existing = await prisma.product.findUnique({
       where: { storeId_slug: { storeId: data.storeId, slug: data.slug } },
     })
@@ -51,6 +64,8 @@ export async function productRoutes(app: FastifyInstance) {
       data: { ...data, price: data.price, comparePrice: data.comparePrice, costPrice: data.costPrice },
       include: { images: true, variants: true, category: { select: { id: true, name: true, nameAr: true } } },
     })
+
+    fireWebhook(data.storeId, 'PRODUCT_CREATED', { productId: product.id, name: product.name, nameAr: product.nameAr }).catch(() => {})
 
     return reply.status(201).send({ message: 'تم إضافة المنتج بنجاح', product })
   })
@@ -148,7 +163,9 @@ export async function productRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'المنتج غير موجود' })
     }
 
-    return reply.send({ product })
+    // LOGIC-004: Omit digitalFileUrl from public response — only expose after purchase verification
+    const { digitalFileUrl: _hidden, ...publicProduct } = product as any
+    return reply.send({ product: publicProduct })
   })
 
   // ── Update Product ────────────────────────────

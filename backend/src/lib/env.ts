@@ -20,6 +20,7 @@ const envSchema = z.object({
   VAPID_PUBLIC_KEY: z.string().min(1).optional(),
   VAPID_PRIVATE_KEY: z.string().min(1).optional(),
   VAPID_EMAIL: z.string().startsWith('mailto:', 'VAPID_EMAIL must start with mailto:').optional(),
+  ADMIN_SETUP_TOKEN: z.string().min(32, 'ADMIN_SETUP_TOKEN must be at least 32 characters'),
 })
 
 function assertPaired(values: Record<string, string | number | undefined>, keys: string[], label: string) {

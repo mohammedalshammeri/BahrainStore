@@ -29,7 +29,7 @@ export default function SubscriptionsPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<"plans" | "subscribers">("plans");
   const [showAdd, setShowAdd] = useState(false);
-  const [newPlan, setNewPlan] = useState({ name: "", nameAr: "", price: "", interval: "MONTHLY", intervalCount: "1", description: "" });
+  const [newPlan, setNewPlan] = useState({ productId: "", name: "", nameAr: "", price: "", intervalType: "MONTHLY", intervalCount: "1", description: "" });
 
   const { data: plansData, isLoading } = useQuery({
     queryKey: ["subscription-plans", store?.id],
@@ -40,14 +40,23 @@ export default function SubscriptionsPage() {
     enabled: !!store?.id,
   });
 
+  const { data: productsData } = useQuery({
+    queryKey: ["products-for-subscriptions", store?.id],
+    queryFn: async () => {
+      const res = await api.get(`/products?storeId=${store!.id}&limit=100`);
+      return res.data as any;
+    },
+    enabled: !!store?.id,
+  });
+
   const addPlanMutation = useMutation({
     mutationFn: async () => {
       await api.post("/subscription-products", {
-        storeId: store!.id,
+        productId: newPlan.productId,
         name: newPlan.name,
         nameAr: newPlan.nameAr,
         price: parseFloat(newPlan.price),
-        interval: newPlan.interval,
+        intervalType: newPlan.intervalType,
         intervalCount: parseInt(newPlan.intervalCount),
         description: newPlan.description || undefined,
       });
@@ -55,7 +64,7 @@ export default function SubscriptionsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["subscription-plans"] });
       setShowAdd(false);
-      setNewPlan({ name: "", nameAr: "", price: "", interval: "MONTHLY", intervalCount: "1", description: "" });
+      setNewPlan({ productId: "", name: "", nameAr: "", price: "", intervalType: "MONTHLY", intervalCount: "1", description: "" });
     },
   });
 
@@ -111,11 +120,23 @@ export default function SubscriptionsPage() {
             {showAdd && (
               <Card className="p-4 border-blue-200 bg-blue-50">
                 <h4 className="font-medium mb-3">إضافة خطة اشتراك</h4>
+                <div className="mb-3">
+                  <select
+                    className="w-full border rounded-md px-3 py-2 text-sm bg-white"
+                    value={newPlan.productId}
+                    onChange={e => setNewPlan(p => ({ ...p, productId: e.target.value }))}
+                  >
+                    <option value="">اختر المنتج</option>
+                    {(productsData?.products || []).map((p: any) => (
+                      <option key={p.id} value={p.id}>{p.nameAr || p.name}</option>
+                    ))}
+                  </select>
+                </div>
                 <div className="grid grid-cols-2 gap-3 mb-3">
                   <Input placeholder="الاسم بالإنجليزية" value={newPlan.name} onChange={e => setNewPlan(p => ({ ...p, name: e.target.value }))} />
                   <Input placeholder="الاسم بالعربية" value={newPlan.nameAr} onChange={e => setNewPlan(p => ({ ...p, nameAr: e.target.value }))} />
                   <Input placeholder="السعر (BHD)" type="number" value={newPlan.price} onChange={e => setNewPlan(p => ({ ...p, price: e.target.value }))} />
-                  <select className="border rounded-md px-3 py-2 text-sm" value={newPlan.interval} onChange={e => setNewPlan(p => ({ ...p, interval: e.target.value }))}>
+                  <select className="border rounded-md px-3 py-2 text-sm" value={newPlan.intervalType} onChange={e => setNewPlan(p => ({ ...p, intervalType: e.target.value }))}>
                     <option value="DAILY">يومي</option>
                     <option value="WEEKLY">أسبوعي</option>
                     <option value="MONTHLY">شهري</option>
@@ -125,7 +146,7 @@ export default function SubscriptionsPage() {
                 </div>
                 <Input placeholder="وصف الخطة (اختياري)" value={newPlan.description} onChange={e => setNewPlan(p => ({ ...p, description: e.target.value }))} className="mb-3" />
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => addPlanMutation.mutate()} disabled={!newPlan.name || !newPlan.price}>إضافة</Button>
+                  <Button size="sm" onClick={() => addPlanMutation.mutate()} disabled={!newPlan.productId || !newPlan.name || !newPlan.price}>إضافة</Button>
                   <Button size="sm" variant="outline" onClick={() => setShowAdd(false)}>إلغاء</Button>
                 </div>
               </Card>

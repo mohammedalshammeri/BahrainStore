@@ -19,6 +19,17 @@ const supportedWebhookEvents = [
 
 const webhookEventSchema = z.enum(supportedWebhookEvents)
 
+// SSRF protection: reject URLs that resolve to private/internal network ranges
+function isSafeWebhookUrl(url: string): boolean {
+  try {
+    const { hostname, protocol } = new URL(url)
+    if (!['http:', 'https:'].includes(protocol)) return false
+    return !/^(localhost$|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|0\.0\.0\.0$|::1$|fc[0-9a-f]{2}:|fd[0-9a-f]{2}:)/i.test(hostname)
+  } catch {
+    return false
+  }
+}
+
 const WEBHOOK_CONTRACT = {
   version: '2026-04-07',
   timeoutMs: 10000,
@@ -203,6 +214,10 @@ export async function webhookRoutes(app: FastifyInstance) {
     const merchantId = (request.user as any).id
     const { storeId, url, events } = result.data
 
+    if (!isSafeWebhookUrl(url)) {
+      return reply.status(400).send({ error: 'عنوان URL غير مسموح به' })
+    }
+
     const store = await prisma.store.findFirst({ where: { id: storeId, merchantId } })
     if (!store) return reply.status(403).send({ error: 'غير مصرح' })
 
@@ -229,6 +244,10 @@ export async function webhookRoutes(app: FastifyInstance) {
       where: { id, store: { merchantId } },
     })
     if (!webhook) return reply.status(404).send({ error: 'غير موجود' })
+
+    if (result.data.url && !isSafeWebhookUrl(result.data.url)) {
+      return reply.status(400).send({ error: 'عنوان URL غير مسموح به' })
+    }
 
     const updated = await prisma.webhook.update({
       where: { id },

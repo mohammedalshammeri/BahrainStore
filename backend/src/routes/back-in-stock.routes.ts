@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
 import nodemailer from 'nodemailer'
 
-async function notifyBackInStock(storeId: string, productId: string) {
+export async function notifyBackInStock(storeId: string, productId: string) {
   const subs = await prisma.backInStockSubscription.findMany({
     where: { storeId, productId, notified: false },
     include: {
@@ -100,5 +100,3 @@ export async function backInStockRoutes(app: FastifyInstance) {
     return reply.send({ message: 'تم تسجيلك، سنُعلمك عند توفر المنتج' })
   })
 }
-
-export { notifyBackInStock }

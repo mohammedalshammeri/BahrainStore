@@ -169,38 +169,45 @@ export async function posRoutes(app: FastifyInstance) {
 
     const orderNumber = `POS-${Date.now()}`
 
-    const order = await prisma.posOrder.create({
-      data: {
-        sessionId: data.sessionId,
-        storeId: data.storeId,
-        orderNumber,
-        items: data.items as any,
-        subtotal,
-        discount: data.discount,
-        vatAmount,
-        total,
-        payMethod: data.payMethod,
-        paidAmount: data.paidAmount,
-        change: Math.max(0, change),
-        customerId: data.customerId,
-        customerName: data.customerName,
-      },
-    })
+    // LOGIC-006: Wrap order creation + stock deduction in a single transaction with stock guard
+    const order = await prisma.$transaction(async (tx) => {
+      const newOrder = await tx.posOrder.create({
+        data: {
+          sessionId: data.sessionId,
+          storeId: data.storeId,
+          orderNumber,
+          items: data.items as any,
+          subtotal,
+          discount: data.discount,
+          vatAmount,
+          total,
+          payMethod: data.payMethod,
+          paidAmount: data.paidAmount,
+          change: Math.max(0, change),
+          customerId: data.customerId,
+          customerName: data.customerName,
+        },
+      })
 
-    // Deduct stock
-    for (const item of data.items) {
-      if (item.variantId) {
-        await prisma.productVariant.updateMany({
-          where: { id: item.variantId },
-          data: { stock: { decrement: item.qty } },
-        })
-      } else {
-        await prisma.product.updateMany({
-          where: { id: item.productId, storeId: data.storeId },
-          data: { stock: { decrement: item.qty } },
-        })
+      // Deduct stock — abort entire transaction if any item is out of stock
+      for (const item of data.items) {
+        if (item.variantId) {
+          const updated = await tx.productVariant.updateMany({
+            where: { id: item.variantId, stock: { gte: item.qty } },
+            data: { stock: { decrement: item.qty } },
+          })
+          if (updated.count !== 1) throw new Error(`STOCK_CONFLICT:${item.name ?? item.variantId}`)
+        } else {
+          const updated = await tx.product.updateMany({
+            where: { id: item.productId, storeId: data.storeId, stock: { gte: item.qty } },
+            data: { stock: { decrement: item.qty } },
+          })
+          if (updated.count !== 1) throw new Error(`STOCK_CONFLICT:${item.name ?? item.productId}`)
+        }
       }
-    }
+
+      return newOrder
+    })
 
     return reply.status(201).send({ message: 'تم تسجيل عملية البيع', order, change: Math.max(0, change) })
   })
@@ -454,36 +461,43 @@ export async function posRoutes(app: FastifyInstance) {
       : total
     const change = Math.max(0, paidAmount - total)
 
-    const order = await prisma.posOrder.create({
-      data: {
-        sessionId: session.id,
-        storeId: payload.storeId,
-        orderNumber: `POS-${Date.now()}`,
-        items: items as any,
-        subtotal,
-        discount: payload.discountAmount,
-        vatAmount,
-        total,
-        payMethod: payload.paymentMethod,
-        paidAmount,
-        change,
-        customerId: payload.customerId,
-      },
-    })
+    // LOGIC-006: Wrap order creation + stock deduction in a single transaction with stock guard
+    const order = await prisma.$transaction(async (tx) => {
+      const newOrder = await tx.posOrder.create({
+        data: {
+          sessionId: session.id,
+          storeId: payload.storeId,
+          orderNumber: `POS-${Date.now()}`,
+          items: items as any,
+          subtotal,
+          discount: payload.discountAmount,
+          vatAmount,
+          total,
+          payMethod: payload.paymentMethod,
+          paidAmount,
+          change,
+          customerId: payload.customerId,
+        },
+      })
 
-    for (const item of items) {
-      if (item.variantId) {
-        await prisma.productVariant.updateMany({
-          where: { id: item.variantId },
-          data: { stock: { decrement: item.qty } },
-        })
-      } else {
-        await prisma.product.updateMany({
-          where: { id: item.productId, storeId: payload.storeId },
-          data: { stock: { decrement: item.qty } },
-        })
+      for (const item of items) {
+        if (item.variantId) {
+          const updated = await tx.productVariant.updateMany({
+            where: { id: item.variantId, stock: { gte: item.qty } },
+            data: { stock: { decrement: item.qty } },
+          })
+          if (updated.count !== 1) throw new Error(`STOCK_CONFLICT:${item.name ?? item.variantId}`)
+        } else {
+          const updated = await tx.product.updateMany({
+            where: { id: item.productId, storeId: payload.storeId, stock: { gte: item.qty } },
+            data: { stock: { decrement: item.qty } },
+          })
+          if (updated.count !== 1) throw new Error(`STOCK_CONFLICT:${item.name ?? item.productId}`)
+        }
       }
-    }
+
+      return newOrder
+    })
 
     return reply.status(201).send({ message: 'تم تسجيل عملية البيع', order, change, session })
   })

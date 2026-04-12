@@ -116,6 +116,23 @@ export async function resolvePlatformAccess(request: FastifyRequest, reply: Fast
 export async function authenticate(request: FastifyRequest, reply: FastifyReply) {
   try {
     await request.jwtVerify()
+
+    // Staff JWT contains { id: staffId, type: 'staff', storeId, role }
+    // All routes use `user.id` as merchantId — resolve it here for staff tokens
+    const user = request.user as any
+    if (user?.type === 'staff') {
+      const staff = await prisma.storeStaff.findUnique({
+        where: { id: user.id },
+        select: { id: true, storeId: true, store: { select: { merchantId: true } } },
+      })
+      if (!staff) {
+        return reply.status(401).send({ error: 'غير مصرح', code: 'UNAUTHORIZED' })
+      }
+      // Keep staffId accessible while making user.id the merchantId for route compatibility
+      user.staffId = user.id
+      user.id = staff.store.merchantId
+      user.storeId = staff.storeId
+    }
   } catch {
     return reply.status(401).send({ error: 'غير مصرح، سجّل دخولك أولاً', code: 'UNAUTHORIZED' })
   }

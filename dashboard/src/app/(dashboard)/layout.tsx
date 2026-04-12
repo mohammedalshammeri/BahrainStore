@@ -15,19 +15,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.replace("/login");
       return;
     }
-    // Re-hydrate merchant + store from API (handles page refreshes / new tabs)
-    if (!merchant || (merchant.isAdmin && merchant.platformAccess === undefined)) {
-      api.get("/auth/me").then((res) => {
-        if (res.data?.merchant) setMerchant(res.data.merchant);
-      }).catch(() => {});
-    }
-    if (!store) {
-      api.get("/stores").then((res) => {
-        const stores = res.data?.stores ?? res.data;
-        if (Array.isArray(stores) && stores[0]) setStore(stores[0]);
-      }).catch(() => {});
-    }
-  }, [router, merchant, store, setMerchant, setStore]);
+    // LOGIC-007: Always verify the token with the server on mount.
+    // The axios 401 interceptor in api.ts handles token refresh and redirects to /login on failure.
+    // This covers the case where the cookie exists but the token has been revoked or is expired.
+    api.get("/auth/me").then((res) => {
+      if (res.data?.merchant) setMerchant(res.data.merchant);
+      if (!store) {
+        api.get("/stores").then((res2) => {
+          const stores = res2.data?.stores ?? res2.data;
+          if (Array.isArray(stores) && stores[0]) setStore(stores[0]);
+        }).catch(() => {});
+      }
+    }).catch(() => {
+      // 401 interceptor in api.ts already redirects to /login — nothing extra needed here
+    });
+  }, [router])  // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-page)' }}>

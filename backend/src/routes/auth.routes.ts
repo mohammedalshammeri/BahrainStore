@@ -22,7 +22,7 @@ const loginSchema = z.object({
 })
 
 const refreshSchema = z.object({
-  refreshToken: z.string().min(1),
+  refreshToken: z.string().min(1).optional(),
 })
 
 const googleExchangeSchema = z.object({
@@ -71,6 +71,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { accessToken, refreshToken } = await generateTokens(app, merchant.id)
 
+    reply.header('Set-Cookie', buildRefreshCookie(refreshToken))
     return reply.status(201).send({
       message: 'تم إنشاء الحساب بنجاح',
       merchant,
@@ -139,6 +140,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { accessToken, refreshToken } = await generateTokens(app, merchant.id)
 
+    reply.header('Set-Cookie', buildRefreshCookie(refreshToken))
     return reply.send({
       message: 'تم تسجيل الدخول بنجاح',
       newIpDetected: !!isNewIp,
@@ -162,8 +164,22 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'الرمز المميز مطلوب' })
     }
 
+    // Cookie-based (httpOnly) is preferred; fall back to body for mobile clients
+    const cookieHeader = request.headers.cookie as string | undefined
+    const cookieToken = cookieHeader
+      ?.split(';')
+      .find(c => c.trim().startsWith('refreshToken='))
+      ?.split('=')
+      .slice(1)
+      .join('=')
+      .trim() ?? null
+    const tokenToUse = cookieToken ?? result.data.refreshToken
+    if (!tokenToUse) {
+      return reply.status(401).send({ error: 'الجلسة منتهية، سجّل دخولك مجدداً' })
+    }
+
     const session = await prisma.session.findUnique({
-      where: { refreshToken: result.data.refreshToken },
+      where: { refreshToken: tokenToUse },
       include: { merchant: true },
     })
 
@@ -175,17 +191,28 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { accessToken, refreshToken } = await generateTokens(app, session.merchantId)
 
+    reply.header('Set-Cookie', buildRefreshCookie(refreshToken))
     return reply.send({ accessToken, refreshToken })
   })
 
   // ── Logout ────────────────────────────────────
   app.post('/logout', { preHandler: authenticate }, async (request, reply) => {
-    const { refreshToken } = request.body as { refreshToken?: string }
+    const cookieHeader = request.headers.cookie as string | undefined
+    const cookieToken = cookieHeader
+      ?.split(';')
+      .find(c => c.trim().startsWith('refreshToken='))
+      ?.split('=')
+      .slice(1)
+      .join('=')
+      .trim() ?? null
+    const bodyToken = (request.body as { refreshToken?: string })?.refreshToken ?? null
+    const tokenToRevoke = cookieToken ?? bodyToken
 
-    if (refreshToken) {
-      await prisma.session.deleteMany({ where: { refreshToken, kind: 'REFRESH' } })
+    if (tokenToRevoke) {
+      await prisma.session.deleteMany({ where: { refreshToken: tokenToRevoke, kind: 'REFRESH' } })
     }
 
+    reply.header('Set-Cookie', clearRefreshCookie())
     return reply.send({ message: 'تم تسجيل الخروج بنجاح' })
   })
 
@@ -218,7 +245,9 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   // ── Forgot Password ───────────────────────────
-  app.post('/forgot-password', async (request, reply) => {
+  app.post('/forgot-password', {
+    config: { rateLimit: { max: 3, timeWindow: '15 minutes' } },
+  }, async (request, reply) => {
     const { email } = request.body as { email?: string }
     if (!email) return reply.status(400).send({ error: 'البريد الإلكتروني مطلوب' })
 
@@ -227,16 +256,17 @@ export async function authRoutes(app: FastifyInstance) {
     // Always return 200 to avoid email enumeration
     if (!merchant) return reply.send({ message: 'إذا كان الحساب موجوداً، ستصلك رسالة بريد إلكتروني' })
 
-    const token = crypto.randomBytes(32).toString('hex')
+    const rawToken = crypto.randomBytes(32).toString('hex')
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex')
     const expires = new Date(Date.now() + 3600_000) // 1 hour
 
     await prisma.merchant.update({
       where: { id: merchant.id },
-      data: { passwordResetToken: token, passwordResetExpires: expires },
+      data: { passwordResetToken: hashedToken, passwordResetExpires: expires },
     })
 
     const dashboardUrl = process.env.DASHBOARD_URL ?? 'http://localhost:3002'
-    const resetUrl = `${dashboardUrl}/reset-password?token=${token}`
+    const resetUrl = `${dashboardUrl}/reset-password?token=${rawToken}`
 
     await sendPasswordResetEmail({
       to: merchant.email,
@@ -253,9 +283,10 @@ export async function authRoutes(app: FastifyInstance) {
     if (!token || !password) return reply.status(400).send({ error: 'البيانات ناقصة' })
     if (password.length < 8) return reply.status(400).send({ error: 'كلمة المرور يجب أن تكون 8 أحرف على الأقل' })
 
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex')
     const merchant = await prisma.merchant.findFirst({
       where: {
-        passwordResetToken: token,
+        passwordResetToken: hashedToken,
         passwordResetExpires: { gt: new Date() },
       },
     })
@@ -340,11 +371,29 @@ export async function authRoutes(app: FastifyInstance) {
       data: { twoFactorEnabled: true },
     })
 
-    return reply.send({ message: 'تم تفعيل المصادقة الثنائية بنجاح' })
+    // Generate 10 one-time backup codes, store as bcrypt hashes, return plain-text once
+    const plainCodes: string[] = []
+    const hashed = await Promise.all(
+      Array.from({ length: 10 }, () => {
+        const code = `${crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 4)}-${crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 4)}`
+        plainCodes.push(code)
+        return bcrypt.hash(code, 10)
+      })
+    )
+
+    // Delete any existing backup codes for this merchant, then insert new ones
+    await prisma.twoFactorBackupCode.deleteMany({ where: { merchantId } })
+    await prisma.twoFactorBackupCode.createMany({
+      data: hashed.map((codeHash) => ({ merchantId, codeHash })),
+    })
+
+    return reply.send({ message: 'تم تفعيل المصادقة الثنائية بنجاح', backupCodes: plainCodes })
   })
 
   // ── 2FA: Verify during login ──────────────────
-  app.post('/2fa/verify', async (request, reply) => {
+  app.post('/2fa/verify', {
+    config: { rateLimit: { max: 5, timeWindow: '10 minutes' } },
+  }, async (request, reply) => {
     const { tempToken, code } = request.body as { tempToken?: string; code?: string }
     if (!tempToken || !code) return reply.status(400).send({ error: 'البيانات ناقصة' })
 
@@ -375,6 +424,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { accessToken, refreshToken } = await generateTokens(app, merchant.id)
 
+    reply.header('Set-Cookie', buildRefreshCookie(refreshToken))
     return reply.send({
       message: 'تم تسجيل الدخول بنجاح',
       merchant: {
@@ -416,6 +466,69 @@ export async function authRoutes(app: FastifyInstance) {
     })
 
     return reply.send({ message: 'تم تعطيل المصادقة الثنائية' })
+  })
+
+  // ── 2FA: Recover with backup code ─────────────
+  app.post('/2fa/recover', {
+    config: { rateLimit: { max: 5, timeWindow: '15 minutes' } },
+  }, async (request, reply) => {
+    const { tempToken, backupCode } = request.body as { tempToken?: string; backupCode?: string }
+    if (!tempToken || !backupCode) return reply.status(400).send({ error: 'البيانات ناقصة' })
+
+    let payload: { id: string; type: string }
+    try {
+      payload = app.jwt.verify(tempToken) as { id: string; type: string }
+    } catch {
+      return reply.status(401).send({ error: 'الرمز المؤقت غير صحيح أو منتهي الصلاحية' })
+    }
+
+    if (payload.type !== '2fa_pending') {
+      return reply.status(401).send({ error: 'رمز مميز غير صحيح' })
+    }
+
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: payload.id },
+      select: { id: true, email: true, phone: true, firstName: true, lastName: true, isActive: true },
+    })
+    if (!merchant) return reply.status(404).send({ error: 'الحساب غير موجود' })
+    if (!merchant.isActive) return reply.status(403).send({ error: 'الحساب موقوف' })
+
+    // Find an unused backup code that matches
+    const allCodes = await prisma.twoFactorBackupCode.findMany({
+      where: { merchantId: payload.id, usedAt: null },
+    })
+    const matched = await (async () => {
+      for (const row of allCodes) {
+        if (await bcrypt.compare(backupCode.toUpperCase(), row.codeHash)) return row
+      }
+      return null
+    })()
+
+    if (!matched) {
+      return reply.status(400).send({ error: 'رمز الاسترداد غير صحيح أو تم استخدامه بالفعل' })
+    }
+
+    // Mark code used
+    await prisma.twoFactorBackupCode.update({
+      where: { id: matched.id },
+      data: { usedAt: new Date() },
+    })
+
+    const { accessToken, refreshToken } = await generateTokens(app, merchant.id)
+
+    reply.header('Set-Cookie', buildRefreshCookie(refreshToken))
+    return reply.send({
+      message: 'تم تسجيل الدخول بنجاح باستخدام رمز الاسترداد',
+      merchant: {
+        id: merchant.id,
+        email: merchant.email,
+        phone: merchant.phone,
+        firstName: merchant.firstName,
+        lastName: merchant.lastName,
+      },
+      accessToken,
+      refreshToken,
+    })
   })
 
   // ── Google OAuth: Initiate ────────────────────
@@ -535,6 +648,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { accessToken, refreshToken } = await generateTokens(app, session.merchantId)
 
+    reply.header('Set-Cookie', buildRefreshCookie(refreshToken))
     return reply.send({
       message: 'تم تسجيل الدخول بنجاح',
       merchant: {
@@ -586,6 +700,16 @@ export async function authRoutes(app: FastifyInstance) {
 }
 
 // ── Helpers ───────────────────────────────────────
+function buildRefreshCookie(token: string): string {
+  const maxAge = 30 * 24 * 3600
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
+  return `refreshToken=${token}; HttpOnly${secure}; SameSite=Strict; Path=/api/v1/auth; Max-Age=${maxAge}`
+}
+
+function clearRefreshCookie(): string {
+  return `refreshToken=; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth; Max-Age=0`
+}
+
 async function generateTokens(app: FastifyInstance, merchantId: string) {
   const accessToken = app.jwt.sign(
     { id: merchantId },

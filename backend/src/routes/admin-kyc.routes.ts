@@ -132,7 +132,7 @@ export async function adminKycRoutes(app: FastifyInstance) {
     const pending = await prisma.kycDocument.count({ where: { merchantId: doc.merchantId, status: 'PENDING' } })
     const approved = await prisma.kycDocument.count({ where: { merchantId: doc.merchantId, status: 'APPROVED' } })
     const rejected = await prisma.kycDocument.count({ where: { merchantId: doc.merchantId, status: 'REJECTED' } })
-    let kycStatus = 'PENDING'
+    let kycStatus: 'PENDING' | 'REJECTED' | 'APPROVED' = 'PENDING'
     if (rejected > 0) kycStatus = 'REJECTED'
     else if (pending === 0 && approved > 0) kycStatus = 'APPROVED'
 

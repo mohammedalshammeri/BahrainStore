@@ -5,6 +5,7 @@ import { findMerchantOrder, findMerchantPaymentByGatewayRef, findMerchantStore }
 import { authenticate } from '../middleware/auth.middleware'
 import https from 'node:https'
 import crypto from 'node:crypto'
+import { processLoanRepayment } from '../lib/finance-repayment'
 
 // ─── BenefitPay (BENEFIT Bahrain) Payment Gateway Integration ────────────────
 // Official payment gateway in Bahrain — connects to Benefit Payment Gateway (BPG)
@@ -323,6 +324,9 @@ export async function benefitPayRoutes(app: FastifyInstance) {
           data: { status: 'PAID', paidAt: new Date(), gatewayRef: transactionId },
         })
 
+        // Deduct from active Bazar Finance loan (fire-and-forget)
+        processLoanRepayment(order.storeId, orderId, Number(order.total)).catch(console.error)
+
         return reply.send({ status: 'PAID', orderId, transactionId, message: 'تم التحقق من الدفع بنجاح' })
       }
 
@@ -382,6 +386,8 @@ export async function benefitPayRoutes(app: FastifyInstance) {
         where: { id: payment.order.id },
         data: { paymentStatus: 'PAID', paidAt: new Date(), status: 'CONFIRMED' },
       })
+      // Deduct from active Bazar Finance loan (fire-and-forget)
+      processLoanRepayment(payment.order.storeId, payment.order.id, Number(payment.order.total)).catch(console.error)
     } else if (transactionStatus === 'DECLINED' || transactionStatus === 'FAILED') {
       await prisma.payment.update({ where: { id: payment.id }, data: { status: 'FAILED' } })
       await prisma.order.update({ where: { id: payment.order.id }, data: { paymentStatus: 'FAILED' } })

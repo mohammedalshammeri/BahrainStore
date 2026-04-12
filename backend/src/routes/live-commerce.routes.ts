@@ -6,8 +6,14 @@ import { authenticate } from '../middleware/auth.middleware'
 import crypto from 'node:crypto'
 
 // ─── Live Commerce (البث المباشر) Routes ──────────────────────────────────────
+// Supported platforms: YOUTUBE | TIKTOK | INSTAGRAM
+// RTMP is NOT supported — merchants stream directly to social platforms
+// and embed the stream URL in their store.
 
 const LIVE_VIEWER_TTL_MS = 45 * 1000
+
+// In-memory viewer presence (single-instance only — accurate within a session)
+// Falls back to last-written DB value after a server restart.
 const liveViewerPresence = new Map<string, Map<string, number>>()
 
 function getPresenceBucket(streamId: string) {
@@ -19,9 +25,9 @@ function getPresenceBucket(streamId: string) {
   return bucket
 }
 
-function sweepViewers(streamId: string) {
+function sweepViewers(streamId: string): number | null {
   const bucket = liveViewerPresence.get(streamId)
-  if (!bucket) return 0
+  if (!bucket) return null // not tracked in memory — caller should use DB value
 
   const cutoff = Date.now() - LIVE_VIEWER_TTL_MS
   for (const [viewerId, timestamp] of bucket.entries()) {
@@ -30,7 +36,7 @@ function sweepViewers(streamId: string) {
 
   if (bucket.size === 0) {
     liveViewerPresence.delete(streamId)
-    return 0
+    return null
   }
 
   return bucket.size
@@ -39,17 +45,20 @@ function sweepViewers(streamId: string) {
 function registerViewerHeartbeat(streamId: string, viewerId: string) {
   const bucket = getPresenceBucket(streamId)
   bucket.set(viewerId, Date.now())
-  return sweepViewers(streamId)
+  return sweepViewers(streamId) ?? 1
 }
 
 function clearViewerPresence(streamId: string) {
   liveViewerPresence.delete(streamId)
 }
 
+// Returns live viewer count: prefers in-memory (accurate), falls back to DB value.
 function attachLiveViewerCount<T extends { id: string; status: string; viewerCount: number }>(stream: T) {
+  if (stream.status !== 'LIVE') return stream
+  const memCount = sweepViewers(stream.id)
   return {
     ...stream,
-    viewerCount: stream.status === 'LIVE' ? sweepViewers(stream.id) : stream.viewerCount,
+    viewerCount: memCount ?? stream.viewerCount, // DB value survives restarts
   }
 }
 
@@ -78,12 +87,12 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
       description: z.string().optional(),
       scheduledAt: z.string().datetime().optional(),
       thumbnailUrl: z.string().url().optional(),
-      platform: z.enum(['YOUTUBE', 'TIKTOK', 'INSTAGRAM', 'CUSTOM']).default('CUSTOM'),
-      embedUrl: z.string().url().optional(),
+      platform: z.enum(['YOUTUBE', 'TIKTOK', 'INSTAGRAM']),
+      embedUrl: z.string().url('يجب أن يكون رابط تضمين صحيح').optional(),
     })
 
     const result = schema.safeParse(request.body)
-    if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة' })
+    if (!result.success) return reply.status(400).send({ error: 'بيانات غير صحيحة', details: result.error.flatten() })
 
     const merchantId = (request.user as any).id
     const { storeId, embedUrl, platform, ...data } = result.data
@@ -106,20 +115,14 @@ export async function liveCommerceRoutes(app: FastifyInstance) {
         platform,
         embedUrl: embedUrl ?? null,
         status: 'SCHEDULED',
-      } as any, // platform & embedUrl added via migration 20260403120000
+      } as any,
     })
 
-    // For CUSTOM, return our RTMP URL. For social platforms the merchant streams
-    // directly to TikTok/YouTube/Instagram — we only embed their stream.
-    const response: any = { message: 'تم إنشاء البث المباشر', stream }
-    if (platform === 'CUSTOM') {
-      response.rtmpUrl = `rtmp://live.bazar.bh/live/${streamKey}`
-      response.hint = 'انسخ رابط RTMP وأضفه في OBS أو أي برنامج بث.'
-    } else {
-      response.hint = getPlatformHint(platform)
-    }
-
-    return reply.status(201).send(response)
+    return reply.status(201).send({
+      message: 'تم إنشاء البث المباشر',
+      stream,
+      hint: getPlatformHint(platform),
+    })
   })
 
   // GET /live-commerce/streams?storeId=

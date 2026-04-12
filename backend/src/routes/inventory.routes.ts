@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/auth.middleware'
+import { notifyBackInStock } from './back-in-stock.routes'
 import { stringify } from 'csv-stringify/sync'
 import { parse } from 'csv-parse/sync'
 import QRCode from 'qrcode'
@@ -53,6 +54,24 @@ export async function inventoryRoutes(app: FastifyInstance) {
       data: { stock: nextStock },
       select: { id: true, stock: true, name: true, nameAr: true },
     })
+
+    // LOGIC-005: Write audit trail for every inventory adjustment
+    await prisma.inventoryLog.create({
+      data: {
+        productId,
+        storeId: product.storeId,
+        merchantId,
+        quantity,
+        previousStock: product.stock,
+        currentStock: nextStock,
+        reason: reason || null,
+      },
+    })
+
+    // Notify subscribers if product came back into stock
+    if (product.stock === 0 && nextStock > 0) {
+      notifyBackInStock(product.storeId, productId).catch(() => {})
+    }
 
     return reply.send({
       message: 'تم تعديل المخزون',

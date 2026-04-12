@@ -7,6 +7,44 @@ import { authenticate } from '../middleware/auth.middleware'
 // Handles: subscription plans per product, customer subscriptions
 
 export async function subscriptionProductRoutes(app: FastifyInstance) {
+  // POST /subscription-products — Create a subscription plan by passing productId in body
+  // This is the endpoint used by the dashboard subscription creation form.
+  app.post('/', { preHandler: authenticate }, async (request, reply) => {
+    const merchantId = (request.user as any).id
+
+    const schema = z.object({
+      productId: z.string().min(1),
+      name: z.string().min(1),
+      nameAr: z.string().min(1),
+      intervalType: z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']).default('MONTHLY'),
+      intervalCount: z.number().int().positive().default(1),
+      price: z.number().positive(),
+      trialDays: z.number().int().min(0).default(0),
+      description: z.string().optional(),
+    })
+
+    const result = schema.safeParse(request.body)
+    if (!result.success) {
+      return reply.status(400).send({ error: 'بيانات غير صحيحة', details: result.error.flatten() })
+    }
+
+    const { productId, description: _desc, ...planData } = result.data
+
+    const product = await prisma.product.findFirst({
+      where: { id: productId },
+      include: { store: true },
+    })
+    if (!product || product.store.merchantId !== merchantId) {
+      return reply.status(403).send({ error: 'غير مصرح' })
+    }
+
+    const plan = await prisma.subscriptionPlan.create({
+      data: { productId, ...planData },
+    })
+
+    return reply.status(201).send({ message: 'تم إنشاء خطة الاشتراك', plan })
+  })
+
   // POST /subscription-products/:productId/plans — Add subscription plan to a product
   app.post('/:productId/plans', { preHandler: authenticate }, async (request, reply) => {
     const { productId } = request.params as { productId: string }

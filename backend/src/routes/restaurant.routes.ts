@@ -171,13 +171,14 @@ export async function restaurantRoutes(app: FastifyInstance) {
 
     // Create order + restaurant order in transaction
     const result = await prisma.$transaction(async (tx) => {
-      const orderCount = await tx.order.count({ where: { storeId } })
-      const counter = orderCount + 1
+      // FEAT-010: use timestamp-based orderNumber to avoid race-condition on tx.order.count()
+      const orderNumber = `R-${Date.now().toString(36).toUpperCase()}`
 
-      // Upsert a restaurant guest customer for the store
+      // FEAT-011: use tableId-scoped guest customer to avoid unique-phone conflict across tables
+      const guestPhone = `rg-${tableId}`
       const guestCustomer = await tx.customer.upsert({
-        where: { storeId_phone: { storeId, phone: 'restaurant-guest' } },
-        create: { storeId, phone: 'restaurant-guest', firstName: 'طاولة', lastName: 'مطعم', isGuest: true },
+        where: { storeId_phone: { storeId, phone: guestPhone } },
+        create: { storeId, phone: guestPhone, firstName: 'طاولة', lastName: `${table.name}`, isGuest: true },
         update: {},
       })
 
@@ -185,7 +186,7 @@ export async function restaurantRoutes(app: FastifyInstance) {
         data: {
           storeId,
           customerId: guestCustomer.id,
-          orderNumber: `R-${counter.toString().padStart(4, '0')}`,
+          orderNumber,
           status: 'PENDING',
           paymentStatus: 'PENDING',
           paymentMethod: 'CASH_ON_DELIVERY',
