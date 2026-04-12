@@ -104,6 +104,8 @@ export async function buildServer() {
       const allowed = [
         'https://bazar.bsmc.bh',
         'https://dashboard.bazar.bsmc.bh',
+        'https://dashboard.bsmc.bh',
+        'https://apibazar.bsmc.bh',
         /^https:\/\/[a-z0-9-]+\.bazar\.bsmc\.bh$/,
         /^https?:\/\/localhost(:\d+)?$/,
         /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
