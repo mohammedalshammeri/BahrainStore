@@ -1,4 +1,4 @@
-﻿-- CreateEnum
+-- CreateEnum
 CREATE TYPE "KycStatus" AS ENUM ('NONE', 'PENDING', 'APPROVED', 'REJECTED');
 
 -- CreateEnum
@@ -3032,4 +3032,3 @@ ALTER TABLE "store_page_templates" ADD CONSTRAINT "store_page_templates_storeId_
 
 -- AddForeignKey
 ALTER TABLE "store_page_templates" ADD CONSTRAINT "store_page_templates_themeConfigId_fkey" FOREIGN KEY ("themeConfigId") REFERENCES "store_theme_configs"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
