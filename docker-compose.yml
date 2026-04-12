@@ -26,6 +26,7 @@ services:
     environment:
       DATABASE_URL: postgresql://bazar:${POSTGRES_PASSWORD}@postgres:5432/bazar
       JWT_SECRET: ${JWT_SECRET}
+      ADMIN_SETUP_TOKEN: ${ADMIN_SETUP_TOKEN}
       BACKEND_URL: https://api.bazar.bsmc.bh
       PORT: 3001
       NODE_ENV: production
