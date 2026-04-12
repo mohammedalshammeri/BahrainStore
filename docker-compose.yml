@@ -27,7 +27,7 @@ services:
       DATABASE_URL: postgresql://bazar:${POSTGRES_PASSWORD}@postgres:5432/bazar
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_SETUP_TOKEN: ${ADMIN_SETUP_TOKEN}
-      BACKEND_URL: https://api.bazar.bsmc.bh
+      BACKEND_URL: https://apibazar.bsmc.bh
       PORT: 3001
       NODE_ENV: production
     volumes:
@@ -41,10 +41,10 @@ services:
     build:
       context: ./dashboard
       args:
-        NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+        NEXT_PUBLIC_API_URL: https://apibazar.bsmc.bh
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+      NEXT_PUBLIC_API_URL: https://apibazar.bsmc.bh
       PORT: 3000
 
   # ── Storefront (Next.js customer-facing) ─────────────────────────────────────
@@ -52,10 +52,10 @@ services:
     build:
       context: ./storefront
       args:
-        NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+        NEXT_PUBLIC_API_URL: https://apibazar.bsmc.bh
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+      NEXT_PUBLIC_API_URL: https://apibazar.bsmc.bh
       PORT: 3002
 
   # ── Nginx reverse proxy ───────────────────────────────────────────────────────
