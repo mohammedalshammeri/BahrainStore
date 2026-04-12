@@ -1,3 +1,9 @@
+﻿-- CreateEnum
+CREATE TYPE "KycStatus" AS ENUM ('NONE', 'PENDING', 'APPROVED', 'REJECTED');
+
+-- CreateEnum
+CREATE TYPE "SessionKind" AS ENUM ('REFRESH', 'OAUTH_EXCHANGE', 'GOOGLE_OAUTH_EXCHANGE');
+
 -- CreateEnum
 CREATE TYPE "ReturnStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED', 'REFUNDED');
 
@@ -125,16 +131,31 @@ CREATE TABLE "merchants" (
     "googleId" TEXT,
     "passwordResetToken" TEXT,
     "passwordResetExpires" TIMESTAMP(3),
+    "lastLoginIp" TEXT,
+    "lastLoginAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "kycStatus" "KycStatus" NOT NULL DEFAULT 'NONE',
 
     CONSTRAINT "merchants_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "two_factor_backup_codes" (
+    "id" TEXT NOT NULL,
+    "merchantId" TEXT NOT NULL,
+    "codeHash" TEXT NOT NULL,
+    "usedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "two_factor_backup_codes_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "sessions" (
     "id" TEXT NOT NULL,
     "merchantId" TEXT NOT NULL,
+    "kind" "SessionKind" NOT NULL DEFAULT 'REFRESH',
     "refreshToken" TEXT NOT NULL,
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -153,6 +174,7 @@ CREATE TABLE "stores" (
     "descriptionAr" TEXT,
     "logo" TEXT,
     "favicon" TEXT,
+    "ogImage" TEXT,
     "domain" TEXT,
     "subdomain" TEXT NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'BHD',
@@ -165,7 +187,10 @@ CREATE TABLE "stores" (
     "plan" "StorePlan" NOT NULL DEFAULT 'STARTER',
     "planExpiresAt" TIMESTAMP(3),
     "trialEndsAt" TIMESTAMP(3),
+    "gracePeriodEnds" TIMESTAMP(3),
+    "paymentRetryCount" INTEGER NOT NULL DEFAULT 0,
     "apiKey" TEXT,
+    "apiKeyEnabled" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -433,7 +458,7 @@ CREATE TABLE "customers" (
 CREATE TABLE "addresses" (
     "id" TEXT NOT NULL,
     "customerId" TEXT NOT NULL,
-    "label" TEXT NOT NULL DEFAULT 'المنزل',
+    "label" TEXT NOT NULL DEFAULT '╪د┘┘à┘╪▓┘',
     "firstName" TEXT NOT NULL,
     "lastName" TEXT NOT NULL,
     "phone" TEXT NOT NULL,
@@ -442,7 +467,7 @@ CREATE TABLE "addresses" (
     "building" TEXT,
     "flat" TEXT,
     "area" TEXT NOT NULL,
-    "city" TEXT NOT NULL DEFAULT 'المنامة',
+    "city" TEXT NOT NULL DEFAULT '╪د┘┘à┘╪د┘à╪ر',
     "country" TEXT NOT NULL DEFAULT 'BH',
     "isDefault" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -469,6 +494,7 @@ CREATE TABLE "orders" (
     "notes" TEXT,
     "trackingNumber" TEXT,
     "shippingCompany" TEXT,
+    "paymentReference" TEXT,
     "paidAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -546,6 +572,7 @@ CREATE TABLE "coupons" (
     "value" DECIMAL(10,3) NOT NULL,
     "minOrderValue" DECIMAL(10,3),
     "maxUses" INTEGER,
+    "maxUsesPerCustomer" INTEGER,
     "usedCount" INTEGER NOT NULL DEFAULT 0,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "expiresAt" TIMESTAMP(3),
@@ -621,6 +648,8 @@ CREATE TABLE "billing_invoices" (
     "paymentRef" TEXT,
     "invoiceNumber" TEXT NOT NULL,
     "notes" TEXT,
+    "discountBD" DECIMAL(10,3),
+    "discountNote" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -637,6 +666,21 @@ CREATE TABLE "admin_notes" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "admin_notes_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "plan_configs" (
+    "id" TEXT NOT NULL,
+    "plan" "StorePlan" NOT NULL,
+    "priceBD" DECIMAL(10,3) NOT NULL,
+    "maxProducts" INTEGER NOT NULL DEFAULT 100,
+    "maxOrders" INTEGER NOT NULL DEFAULT 500,
+    "maxStaff" INTEGER NOT NULL DEFAULT 1,
+    "maxApps" INTEGER NOT NULL DEFAULT 0,
+    "features" TEXT[],
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "plan_configs_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -858,6 +902,8 @@ CREATE TABLE "support_tickets" (
     "status" "TicketStatus" NOT NULL DEFAULT 'OPEN',
     "priority" "TicketPriority" NOT NULL DEFAULT 'MEDIUM',
     "category" TEXT,
+    "assignedTo" TEXT,
+    "assignedToName" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "resolvedAt" TIMESTAMP(3),
@@ -965,6 +1011,8 @@ CREATE TABLE "announcements" (
     "type" "AnnouncementType" NOT NULL DEFAULT 'INFO',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "isPinned" BOOLEAN NOT NULL DEFAULT false,
+    "targetPlan" TEXT,
+    "viewCount" INTEGER NOT NULL DEFAULT 0,
     "startsAt" TIMESTAMP(3),
     "endsAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -982,7 +1030,7 @@ CREATE TABLE "help_articles" (
     "body" TEXT NOT NULL,
     "bodyAr" TEXT NOT NULL,
     "category" TEXT NOT NULL DEFAULT 'general',
-    "categoryAr" TEXT NOT NULL DEFAULT 'عام',
+    "categoryAr" TEXT NOT NULL DEFAULT '╪╣╪د┘à',
     "isPublished" BOOLEAN NOT NULL DEFAULT false,
     "sortOrder" INTEGER NOT NULL DEFAULT 0,
     "viewCount" INTEGER NOT NULL DEFAULT 0,
@@ -1152,6 +1200,31 @@ CREATE TABLE "coupon_rules" (
 );
 
 -- CreateTable
+CREATE TABLE "coupon_usages" (
+    "id" TEXT NOT NULL,
+    "couponId" TEXT NOT NULL,
+    "customerId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "coupon_usages_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "inventory_logs" (
+    "id" TEXT NOT NULL,
+    "productId" TEXT NOT NULL,
+    "storeId" TEXT NOT NULL,
+    "merchantId" TEXT NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    "previousStock" INTEGER NOT NULL,
+    "currentStock" INTEGER NOT NULL,
+    "reason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "inventory_logs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "pos_sessions" (
     "id" TEXT NOT NULL,
     "storeId" TEXT NOT NULL,
@@ -1266,6 +1339,7 @@ CREATE TABLE "themes" (
     "isPremium" BOOLEAN NOT NULL DEFAULT false,
     "isApproved" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "isFeatured" BOOLEAN NOT NULL DEFAULT false,
     "downloadUrl" TEXT,
     "tags" TEXT[],
     "installCount" INTEGER NOT NULL DEFAULT 0,
@@ -1335,6 +1409,8 @@ CREATE TABLE "live_streams" (
     "startedAt" TIMESTAMP(3),
     "endedAt" TIMESTAMP(3),
     "streamKey" TEXT NOT NULL,
+    "platform" TEXT NOT NULL DEFAULT 'CUSTOM',
+    "embedUrl" TEXT,
     "playbackUrl" TEXT,
     "thumbnailUrl" TEXT,
     "viewerCount" INTEGER NOT NULL DEFAULT 0,
@@ -1752,6 +1828,512 @@ CREATE TABLE "whatsapp_commerce_configs" (
     CONSTRAINT "whatsapp_commerce_configs_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "platform_blog_posts" (
+    "id" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "titleAr" TEXT NOT NULL,
+    "slug" TEXT NOT NULL,
+    "content" TEXT NOT NULL,
+    "contentAr" TEXT,
+    "excerpt" TEXT,
+    "excerptAr" TEXT,
+    "coverImage" TEXT,
+    "category" TEXT NOT NULL DEFAULT 'news',
+    "isPublished" BOOLEAN NOT NULL DEFAULT false,
+    "publishedAt" TIMESTAMP(3),
+    "tags" TEXT[],
+    "authorName" TEXT,
+    "views" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "platform_blog_posts_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "email_templates" (
+    "id" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
+    "subjectAr" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "bodyAr" TEXT NOT NULL,
+    "vars" TEXT[],
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "email_templates_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "platform_roles" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "description" TEXT,
+    "canViewMerchants" BOOLEAN NOT NULL DEFAULT false,
+    "canDisableStore" BOOLEAN NOT NULL DEFAULT false,
+    "canReplyTickets" BOOLEAN NOT NULL DEFAULT false,
+    "canEditPlans" BOOLEAN NOT NULL DEFAULT false,
+    "canManageApps" BOOLEAN NOT NULL DEFAULT false,
+    "canViewFinancials" BOOLEAN NOT NULL DEFAULT false,
+    "canViewAuditLog" BOOLEAN NOT NULL DEFAULT false,
+    "canManageContent" BOOLEAN NOT NULL DEFAULT false,
+    "canReviewKYC" BOOLEAN NOT NULL DEFAULT false,
+    "canManageTeam" BOOLEAN NOT NULL DEFAULT false,
+    "isSystem" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "platform_roles_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "platform_staff" (
+    "id" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "firstName" TEXT NOT NULL,
+    "lastName" TEXT NOT NULL,
+    "roleId" TEXT NOT NULL,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "inviteToken" TEXT,
+    "invitedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "joinedAt" TIMESTAMP(3),
+    "lastLoginAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "platform_staff_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "audit_logs" (
+    "id" TEXT NOT NULL,
+    "actorId" TEXT NOT NULL,
+    "actorType" TEXT NOT NULL,
+    "actorName" TEXT NOT NULL,
+    "actorEmail" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "entityType" TEXT,
+    "entityId" TEXT,
+    "entityName" TEXT,
+    "details" JSONB,
+    "ip" TEXT,
+    "userAgent" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "audit_logs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "subscription_coupons" (
+    "id" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "description" TEXT,
+    "type" TEXT NOT NULL DEFAULT 'PERCENTAGE',
+    "value" DECIMAL(10,3) NOT NULL,
+    "maxUses" INTEGER,
+    "usedCount" INTEGER NOT NULL DEFAULT 0,
+    "applicablePlan" TEXT,
+    "validFrom" TIMESTAMP(3),
+    "validTo" TIMESTAMP(3),
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "subscription_coupons_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "subscription_coupon_usages" (
+    "id" TEXT NOT NULL,
+    "couponId" TEXT NOT NULL,
+    "merchantId" TEXT NOT NULL,
+    "storeId" TEXT,
+    "discount" DECIMAL(10,3) NOT NULL,
+    "usedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "subscription_coupon_usages_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "merchant_referrals" (
+    "id" TEXT NOT NULL,
+    "referrerId" TEXT NOT NULL,
+    "referrerName" TEXT NOT NULL,
+    "referrerEmail" TEXT NOT NULL,
+    "referredEmail" TEXT NOT NULL,
+    "referredMerchantId" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "rewardAmount" DECIMAL(10,3) NOT NULL DEFAULT 0,
+    "rewardedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "merchant_referrals_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "kyc_documents" (
+    "id" TEXT NOT NULL,
+    "merchantId" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "fileUrl" TEXT NOT NULL,
+    "fileName" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "reviewNote" TEXT,
+    "reviewedAt" TIMESTAMP(3),
+    "reviewedBy" TEXT,
+    "expiresAt" TIMESTAMP(3),
+    "reVerifyBy" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "kyc_documents_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "blacklist" (
+    "id" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    "reason" TEXT,
+    "createdBy" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "blacklist_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "legal_pages" (
+    "id" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "content" TEXT NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "updatedBy" TEXT,
+
+    CONSTRAINT "legal_pages_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "terms_acceptances" (
+    "id" TEXT NOT NULL,
+    "merchantId" TEXT NOT NULL,
+    "version" TEXT NOT NULL DEFAULT '1.0',
+    "acceptedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "ipAddress" TEXT,
+    "userAgent" TEXT,
+
+    CONSTRAINT "terms_acceptances_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "platform_settings" (
+    "id" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "platform_settings_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "feature_flags" (
+    "id" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "description" TEXT,
+    "isEnabled" BOOLEAN NOT NULL DEFAULT false,
+    "enabledForPlans" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "betaMerchantIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "feature_flags_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "maintenance_windows" (
+    "id" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "message" TEXT NOT NULL,
+    "isActive" BOOLEAN NOT NULL DEFAULT false,
+    "scheduledStart" TIMESTAMP(3),
+    "scheduledEnd" TIMESTAMP(3),
+    "notifyMerchants" BOOLEAN NOT NULL DEFAULT true,
+    "notifiedAt" TIMESTAMP(3),
+    "createdBy" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "maintenance_windows_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "rate_limit_configs" (
+    "id" TEXT NOT NULL,
+    "plan" TEXT NOT NULL,
+    "reqPerMinute" INTEGER NOT NULL DEFAULT 60,
+    "reqPerDay" INTEGER NOT NULL DEFAULT 10000,
+    "burstLimit" INTEGER NOT NULL DEFAULT 20,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "rate_limit_configs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "bulk_campaigns" (
+    "id" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "subject" TEXT,
+    "body" TEXT NOT NULL,
+    "targetPlan" TEXT,
+    "targetRegion" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "scheduledAt" TIMESTAMP(3),
+    "sentAt" TIMESTAMP(3),
+    "totalSent" INTEGER NOT NULL DEFAULT 0,
+    "opens" INTEGER NOT NULL DEFAULT 0,
+    "clicks" INTEGER NOT NULL DEFAULT 0,
+    "createdBy" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "bulk_campaigns_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "platform_incidents" (
+    "id" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'NOTICE',
+    "status" TEXT NOT NULL DEFAULT 'INVESTIGATING',
+    "isPublic" BOOLEAN NOT NULL DEFAULT true,
+    "updates" JSONB NOT NULL DEFAULT '[]',
+    "resolvedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "platform_incidents_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "merchant_payments" (
+    "id" TEXT NOT NULL,
+    "storeId" TEXT NOT NULL,
+    "merchantId" TEXT NOT NULL,
+    "invoiceId" TEXT,
+    "amount" DECIMAL(10,3) NOT NULL,
+    "currency" TEXT NOT NULL DEFAULT 'BHD',
+    "paymentMethod" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "gatewayRef" TEXT,
+    "tapPaymentUrl" TEXT,
+    "retryCount" INTEGER NOT NULL DEFAULT 0,
+    "failedAt" TIMESTAMP(3),
+    "paidAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "merchant_payments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "api_usage_logs" (
+    "id" TEXT NOT NULL,
+    "storeId" TEXT NOT NULL,
+    "endpoint" TEXT NOT NULL,
+    "method" TEXT NOT NULL,
+    "statusCode" INTEGER NOT NULL,
+    "duration" INTEGER NOT NULL,
+    "ip" TEXT,
+    "userAgent" TEXT,
+    "version" TEXT NOT NULL DEFAULT 'v1',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "api_usage_logs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "api_changelogs" (
+    "id" TEXT NOT NULL,
+    "version" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'IMPROVEMENT',
+    "isPublished" BOOLEAN NOT NULL DEFAULT true,
+    "publishedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "api_changelogs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "admin_ip_whitelist" (
+    "id" TEXT NOT NULL,
+    "ip" TEXT NOT NULL,
+    "label" TEXT,
+    "addedBy" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "admin_ip_whitelist_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "login_attempts" (
+    "id" TEXT NOT NULL,
+    "ip" TEXT NOT NULL,
+    "email" TEXT,
+    "success" BOOLEAN NOT NULL DEFAULT false,
+    "userAgent" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "login_attempts_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "security_settings" (
+    "id" TEXT NOT NULL DEFAULT 'platform',
+    "require2FAForAdmins" BOOLEAN NOT NULL DEFAULT false,
+    "ipWhitelistEnabled" BOOLEAN NOT NULL DEFAULT false,
+    "maxLoginAttempts" INTEGER NOT NULL DEFAULT 5,
+    "banDurationMinutes" INTEGER NOT NULL DEFAULT 30,
+    "sessionTimeoutMinutes" INTEGER NOT NULL DEFAULT 120,
+    "passwordMinLength" INTEGER NOT NULL DEFAULT 8,
+    "passwordRequireUpper" BOOLEAN NOT NULL DEFAULT false,
+    "passwordRequireNumber" BOOLEAN NOT NULL DEFAULT false,
+    "passwordExpiryDays" INTEGER NOT NULL DEFAULT 0,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "security_settings_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "supported_languages" (
+    "id" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "direction" TEXT NOT NULL DEFAULT 'ltr',
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "isDefault" BOOLEAN NOT NULL DEFAULT false,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "supported_languages_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "supported_currencies" (
+    "id" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "symbol" TEXT NOT NULL,
+    "symbolAr" TEXT,
+    "exchangeRate" DECIMAL(18,6) NOT NULL DEFAULT 1,
+    "baseCurrency" BOOLEAN NOT NULL DEFAULT false,
+    "decimalPlaces" INTEGER NOT NULL DEFAULT 3,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "supported_currencies_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "supported_countries" (
+    "id" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "phonePrefix" TEXT,
+    "currencyCode" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "isDefault" BOOLEAN NOT NULL DEFAULT false,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "supported_countries_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "platform_config" (
+    "id" TEXT NOT NULL DEFAULT 'platform',
+    "platformName" TEXT NOT NULL DEFAULT 'BahrainStore',
+    "platformNameAr" TEXT NOT NULL DEFAULT '╪ذ╪ص╪▒┘è┘ ╪│╪ز┘ê╪▒',
+    "logoUrl" TEXT,
+    "faviconUrl" TEXT,
+    "primaryColor" TEXT NOT NULL DEFAULT '#3b82f6',
+    "secondaryColor" TEXT NOT NULL DEFAULT '#8b5cf6',
+    "accentColor" TEXT NOT NULL DEFAULT '#06b6d4',
+    "companyName" TEXT,
+    "companyNameAr" TEXT,
+    "companyAddress" TEXT,
+    "companyAddressAr" TEXT,
+    "companyPhone" TEXT,
+    "companyEmail" TEXT,
+    "companyVatNumber" TEXT,
+    "companyCrNumber" TEXT,
+    "bankName" TEXT,
+    "bankNameAr" TEXT,
+    "bankIban" TEXT,
+    "bankAccountName" TEXT,
+    "bankSwiftCode" TEXT,
+    "supportEmail" TEXT,
+    "supportPhone" TEXT,
+    "baseCurrency" TEXT NOT NULL DEFAULT 'BHD',
+    "defaultLanguage" TEXT NOT NULL DEFAULT 'ar',
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "platform_config_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "theme_assets" (
+    "id" TEXT NOT NULL,
+    "themeId" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "content" TEXT,
+    "url" TEXT,
+    "mimeType" TEXT NOT NULL DEFAULT 'application/json',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "theme_assets_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "store_theme_configs" (
+    "id" TEXT NOT NULL,
+    "storeId" TEXT NOT NULL,
+    "themeId" TEXT NOT NULL,
+    "role" TEXT NOT NULL DEFAULT 'main',
+    "settingsData" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "store_theme_configs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "store_page_templates" (
+    "id" TEXT NOT NULL,
+    "storeId" TEXT NOT NULL,
+    "themeConfigId" TEXT NOT NULL,
+    "pageType" TEXT NOT NULL,
+    "content" JSONB NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "store_page_templates_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "merchants_email_key" ON "merchants"("email");
 
@@ -1763,6 +2345,9 @@ CREATE UNIQUE INDEX "merchants_googleId_key" ON "merchants"("googleId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "merchants_passwordResetToken_key" ON "merchants"("passwordResetToken");
+
+-- CreateIndex
+CREATE INDEX "two_factor_backup_codes_merchantId_idx" ON "two_factor_backup_codes"("merchantId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "sessions_refreshToken_key" ON "sessions"("refreshToken");
@@ -1792,10 +2377,25 @@ CREATE INDEX "page_views_storeId_createdAt_idx" ON "page_views"("storeId", "crea
 CREATE UNIQUE INDEX "categories_storeId_slug_key" ON "categories"("storeId", "slug");
 
 -- CreateIndex
+CREATE INDEX "products_storeId_isActive_idx" ON "products"("storeId", "isActive");
+
+-- CreateIndex
+CREATE INDEX "products_storeId_isFeatured_idx" ON "products"("storeId", "isFeatured");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "products_storeId_slug_key" ON "products"("storeId", "slug");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "customers_storeId_phone_key" ON "customers"("storeId", "phone");
+
+-- CreateIndex
+CREATE INDEX "orders_storeId_createdAt_idx" ON "orders"("storeId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "orders_storeId_status_idx" ON "orders"("storeId", "status");
+
+-- CreateIndex
+CREATE INDEX "orders_storeId_paymentStatus_idx" ON "orders"("storeId", "paymentStatus");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "orders_storeId_orderNumber_key" ON "orders"("storeId", "orderNumber");
@@ -1829,6 +2429,9 @@ CREATE INDEX "billing_invoices_storeId_idx" ON "billing_invoices"("storeId");
 
 -- CreateIndex
 CREATE INDEX "admin_notes_merchantId_idx" ON "admin_notes"("merchantId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "plan_configs_plan_key" ON "plan_configs"("plan");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "apps_slug_key" ON "apps"("slug");
@@ -1880,6 +2483,15 @@ CREATE INDEX "customer_subscriptions_storeId_customerId_idx" ON "customer_subscr
 
 -- CreateIndex
 CREATE UNIQUE INDEX "push_subscriptions_storeId_endpoint_key" ON "push_subscriptions"("storeId", "endpoint");
+
+-- CreateIndex
+CREATE INDEX "coupon_usages_couponId_customerId_idx" ON "coupon_usages"("couponId", "customerId");
+
+-- CreateIndex
+CREATE INDEX "inventory_logs_productId_createdAt_idx" ON "inventory_logs"("productId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "inventory_logs_storeId_createdAt_idx" ON "inventory_logs"("storeId", "createdAt");
 
 -- CreateIndex
 CREATE INDEX "error_logs_createdAt_idx" ON "error_logs"("createdAt");
@@ -1991,6 +2603,108 @@ CREATE UNIQUE INDEX "whatsapp_commerce_sessions_storeId_phone_key" ON "whatsapp_
 
 -- CreateIndex
 CREATE UNIQUE INDEX "whatsapp_commerce_configs_storeId_key" ON "whatsapp_commerce_configs"("storeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "platform_blog_posts_slug_key" ON "platform_blog_posts"("slug");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "email_templates_key_key" ON "email_templates"("key");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "platform_roles_name_key" ON "platform_roles"("name");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "platform_staff_email_key" ON "platform_staff"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "platform_staff_inviteToken_key" ON "platform_staff"("inviteToken");
+
+-- CreateIndex
+CREATE INDEX "audit_logs_actorId_idx" ON "audit_logs"("actorId");
+
+-- CreateIndex
+CREATE INDEX "audit_logs_action_idx" ON "audit_logs"("action");
+
+-- CreateIndex
+CREATE INDEX "audit_logs_createdAt_idx" ON "audit_logs"("createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "subscription_coupons_code_key" ON "subscription_coupons"("code");
+
+-- CreateIndex
+CREATE INDEX "merchant_referrals_referrerId_idx" ON "merchant_referrals"("referrerId");
+
+-- CreateIndex
+CREATE INDEX "merchant_referrals_status_idx" ON "merchant_referrals"("status");
+
+-- CreateIndex
+CREATE INDEX "kyc_documents_merchantId_idx" ON "kyc_documents"("merchantId");
+
+-- CreateIndex
+CREATE INDEX "kyc_documents_status_idx" ON "kyc_documents"("status");
+
+-- CreateIndex
+CREATE INDEX "blacklist_type_idx" ON "blacklist"("type");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "blacklist_type_value_key" ON "blacklist"("type", "value");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "legal_pages_type_key" ON "legal_pages"("type");
+
+-- CreateIndex
+CREATE INDEX "terms_acceptances_merchantId_idx" ON "terms_acceptances"("merchantId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "platform_settings_key_key" ON "platform_settings"("key");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "feature_flags_key_key" ON "feature_flags"("key");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "rate_limit_configs_plan_key" ON "rate_limit_configs"("plan");
+
+-- CreateIndex
+CREATE INDEX "merchant_payments_storeId_idx" ON "merchant_payments"("storeId");
+
+-- CreateIndex
+CREATE INDEX "merchant_payments_merchantId_idx" ON "merchant_payments"("merchantId");
+
+-- CreateIndex
+CREATE INDEX "api_usage_logs_storeId_idx" ON "api_usage_logs"("storeId");
+
+-- CreateIndex
+CREATE INDEX "api_usage_logs_createdAt_idx" ON "api_usage_logs"("createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "admin_ip_whitelist_ip_key" ON "admin_ip_whitelist"("ip");
+
+-- CreateIndex
+CREATE INDEX "login_attempts_ip_idx" ON "login_attempts"("ip");
+
+-- CreateIndex
+CREATE INDEX "login_attempts_email_idx" ON "login_attempts"("email");
+
+-- CreateIndex
+CREATE INDEX "login_attempts_createdAt_idx" ON "login_attempts"("createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "supported_languages_code_key" ON "supported_languages"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "supported_currencies_code_key" ON "supported_currencies"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "supported_countries_code_key" ON "supported_countries"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "theme_assets_themeId_key_key" ON "theme_assets"("themeId", "key");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "store_page_templates_storeId_themeConfigId_pageType_key" ON "store_page_templates"("storeId", "themeConfigId", "pageType");
+
+-- AddForeignKey
+ALTER TABLE "two_factor_backup_codes" ADD CONSTRAINT "two_factor_backup_codes_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -2197,6 +2911,12 @@ ALTER TABLE "push_notification_campaigns" ADD CONSTRAINT "push_notification_camp
 ALTER TABLE "coupon_rules" ADD CONSTRAINT "coupon_rules_couponId_fkey" FOREIGN KEY ("couponId") REFERENCES "coupons"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "coupon_usages" ADD CONSTRAINT "coupon_usages_couponId_fkey" FOREIGN KEY ("couponId") REFERENCES "coupons"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "inventory_logs" ADD CONSTRAINT "inventory_logs_productId_fkey" FOREIGN KEY ("productId") REFERENCES "products"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "pos_sessions" ADD CONSTRAINT "pos_sessions_storeId_fkey" FOREIGN KEY ("storeId") REFERENCES "stores"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -2276,3 +2996,40 @@ ALTER TABLE "restaurant_orders" ADD CONSTRAINT "restaurant_orders_tableId_fkey" 
 
 -- AddForeignKey
 ALTER TABLE "merchant_badges_earned" ADD CONSTRAINT "merchant_badges_earned_badgeId_fkey" FOREIGN KEY ("badgeId") REFERENCES "merchant_badges"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "platform_staff" ADD CONSTRAINT "platform_staff_roleId_fkey" FOREIGN KEY ("roleId") REFERENCES "platform_roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "subscription_coupon_usages" ADD CONSTRAINT "subscription_coupon_usages_couponId_fkey" FOREIGN KEY ("couponId") REFERENCES "subscription_coupons"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "merchant_referrals" ADD CONSTRAINT "merchant_referrals_referrerId_fkey" FOREIGN KEY ("referrerId") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "kyc_documents" ADD CONSTRAINT "kyc_documents_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "terms_acceptances" ADD CONSTRAINT "terms_acceptances_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "merchant_payments" ADD CONSTRAINT "merchant_payments_storeId_fkey" FOREIGN KEY ("storeId") REFERENCES "stores"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "api_usage_logs" ADD CONSTRAINT "api_usage_logs_storeId_fkey" FOREIGN KEY ("storeId") REFERENCES "stores"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "theme_assets" ADD CONSTRAINT "theme_assets_themeId_fkey" FOREIGN KEY ("themeId") REFERENCES "themes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "store_theme_configs" ADD CONSTRAINT "store_theme_configs_storeId_fkey" FOREIGN KEY ("storeId") REFERENCES "stores"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "store_theme_configs" ADD CONSTRAINT "store_theme_configs_themeId_fkey" FOREIGN KEY ("themeId") REFERENCES "themes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "store_page_templates" ADD CONSTRAINT "store_page_templates_storeId_fkey" FOREIGN KEY ("storeId") REFERENCES "stores"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "store_page_templates" ADD CONSTRAINT "store_page_templates_themeConfigId_fkey" FOREIGN KEY ("themeConfigId") REFERENCES "store_theme_configs"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
